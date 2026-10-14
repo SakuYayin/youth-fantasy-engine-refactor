@@ -19,8 +19,15 @@
  * 这样 P3-A2/A3 加接口时不需要改已发布的 DDL。
  */
 
-/** 本 DDL 集对应的 schema 版本。`server_schema_migrations` 的版本号与它比对。 */
-export const SERVER_SCHEMA_VERSION = 1
+/**
+ * 本 DDL 集对应的 schema 版本。`server_schema_migrations` 的版本号与它比对。
+ *
+ * 版本 1 = 基线（`SCHEMA_DDL`）；版本 2 = `syncDdl.ts` 的 `SYNC_DDL_V2`
+ * （工作区元数据 / 实体投影 / 冲突留痕 / change_feed 的 batch_id+op_id）。
+ * 加迁移时必须同步 +1：`migrateServerDatabase` 用它判断"库比程序新"，
+ * 忘了改会让刚加的迁移被判定为"库过新"而拒绝打开。
+ */
+export const SERVER_SCHEMA_VERSION = 2
 
 /**
  * 表名常量。
@@ -42,6 +49,10 @@ export const SERVER_TABLES = {
   changeFeed: 'change_feed',
   uploadSessions: 'upload_sessions',
   auditEvents: 'audit_events',
+  /** schema 版本 2 起（`./syncDdl.ts`）：工作区元数据、实体投影、冲突留痕。 */
+  workspaces: 'workspaces',
+  syncEntities: 'sync_entities',
+  syncConflicts: 'sync_conflicts',
 } as const
 
 export type ServerTableName = (typeof SERVER_TABLES)[keyof typeof SERVER_TABLES]

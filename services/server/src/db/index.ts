@@ -40,6 +40,47 @@ export type {
 export { ROLE_CHECK_SQL, SCHEMA_DDL, SERVER_SCHEMA_VERSION, SERVER_TABLES } from './ddl.js'
 export type { ServerTableName } from './ddl.js'
 
+// --- 同步 schema（版本 2） ---
+export { SYNC_DDL_V2, SYNC_SCHEMA_VERSION, SYNC_TABLES } from './syncDdl.js'
+
+// --- 规范化与摘要（幂等键的"同一份载荷"由此定义） ---
+export { canonicalByteLength, canonicalJson, digestOf } from './canonical.js'
+
+// --- 工作区元数据 ---
+export {
+  countWorkspacesForUser,
+  findWorkspace,
+  insertWorkspace,
+  listWorkspacesForUser,
+} from './workspaces.js'
+export type { WorkspaceMembershipSummary, WorkspaceRow } from './workspaces.js'
+
+// --- 同步状态：变更流 / 实体投影 / 回执 / 冲突 ---
+export {
+  appendChange,
+  findEntityState,
+  findFeedEntryByOpId,
+  findReceipt,
+  insertReceipt,
+  listChanges,
+  listConflictsForBatch,
+  listEntityVersions,
+  listLiveEntities,
+  readHeadSeq,
+  recordConflicts,
+  upsertEntity,
+} from './sync.js'
+export type {
+  AppendChangeInput,
+  ConflictReason,
+  EntityState,
+  FeedEntry,
+  InsertReceiptInput,
+  ReceiptRow,
+  RecordConflictInput,
+  UpsertEntityInput,
+} from './sync.js'
+
 // --- 迁移 ---
 export {
   MIGRATIONS,

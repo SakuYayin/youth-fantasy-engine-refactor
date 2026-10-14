@@ -46,6 +46,10 @@ export const AUDIT_ACTIONS = {
   userDisabled: 'user.disabled',
   userEnabled: 'user.enabled',
   passwordReset: 'user.password_reset',
+  // 同步批次：接受与"整批拒绝"都要留痕。"拒绝"不是错误日志的噪声，
+  // 而是"谁在什么时候基于过期基线提交过什么"的唯一线索（冲突排查靠它）。
+  syncBatchAccepted: 'sync.batch.accepted',
+  syncBatchRejected: 'sync.batch.rejected',
 } as const
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS]

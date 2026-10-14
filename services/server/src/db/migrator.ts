@@ -31,6 +31,7 @@ import { ContractError, checkSchemaCompat, newIds } from '@yfe/contracts'
 import type { ErrorPayload, Result } from '@yfe/contracts'
 
 import { SCHEMA_DDL, SERVER_SCHEMA_VERSION } from './ddl.js'
+import { SYNC_DDL_V2 } from './syncDdl.js'
 import type { ServerDb } from './open.js'
 
 /** 版本记录表名。刻意用独立名字，避免与桌面库的 `schema_migrations` 语义混淆。 */
@@ -95,6 +96,14 @@ export const MIGRATIONS: readonly ServerMigration[] = [
     version: 1,
     checksum: checksumOf(SCHEMA_DDL),
     statements: SCHEMA_DDL,
+  },
+  {
+    // P3-A3：工作区元数据 + 实体投影 + 冲突留痕 + change_feed 溯源列。
+    // 已发布语句一个字都没动，全部是追加（含 workspaces 的历史数据回填，
+    // 理由见 `syncDdl.ts` 文件头）。
+    version: 2,
+    checksum: checksumOf(SYNC_DDL_V2),
+    statements: SYNC_DDL_V2,
   },
 ]
 

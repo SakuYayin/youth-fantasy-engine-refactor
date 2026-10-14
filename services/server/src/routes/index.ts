@@ -34,7 +34,10 @@ import { registerHealthRoutes } from '../http/health.js'
 import type { RateLimiter } from '../http/rateLimit.js'
 import type { PermissionGuards } from '../permission/index.js'
 import { registerAuthRoutes } from './auth.js'
+import { registerCapabilitiesRoute } from './capabilities.js'
 import { registerSetupRoute } from './setup.js'
+import { registerSyncRoutes } from './sync.js'
+import { registerWorkspaceRoutes } from './workspaces.js'
 
 export interface RouteDeps {
   readonly db: ServerDb
@@ -45,6 +48,14 @@ export interface RouteDeps {
   readonly startedAtMs: number
   readonly nowMs: () => number
   readonly bootstrapSecretFile: string | null
+  /**
+   * 传输层请求体上限（来自 `config.bodyLimitBytes`）。
+   *
+   * 透传给 capabilities 与批次路由，让"对外上报的上限"与"实际能收下的上限"
+   * 永远是同一个数：运维调小 `YFE_BODY_LIMIT_BYTES` 后，Fastify 会在进路由之前
+   * 就 413，如果 capabilities 仍报 4 MiB，客户端会按服务端收不下的粒度分片。
+   */
+  readonly bodyLimitBytes: number
   readonly guards: PermissionGuards
   readonly log?: (line: Record<string, unknown>) => void
   readonly rateLimiters?: {
@@ -79,6 +90,31 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     now: deps.now,
     guards: deps.guards,
     ...(deps.rateLimiters?.login === undefined ? {} : { loginRateLimiter: deps.rateLimiters.login }),
+    ...(deps.log === undefined ? {} : { log: deps.log }),
+  })
+
+  // 能力发现：协议版本、资源上限、附件与远程命令能力。
+  registerCapabilitiesRoute(app, {
+    serverId: deps.serverId,
+    bodyLimitBytes: deps.bodyLimitBytes,
+    guards: deps.guards,
+  })
+
+  // 工作区元数据：按主体列举 / 创建（角色由服务端决定）。
+  registerWorkspaceRoutes(app, {
+    db: deps.db,
+    now: deps.now,
+    guards: deps.guards,
+    ...(deps.log === undefined ? {} : { log: deps.log }),
+  })
+
+  // 同步：快照 / 增量 / 原子批次 / 回执 / 版本历史 / 只读投影。
+  registerSyncRoutes(app, {
+    db: deps.db,
+    policy: deps.policy,
+    now: deps.now,
+    guards: deps.guards,
+    bodyLimitBytes: deps.bodyLimitBytes,
     ...(deps.log === undefined ? {} : { log: deps.log }),
   })
 }

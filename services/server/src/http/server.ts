@@ -249,6 +249,7 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
     startedAtMs: startedAtMs,
     nowMs: () => Date.now(),
     bootstrapSecretFile: config.bootstrapSecretFile,
+    bodyLimitBytes: config.bodyLimitBytes,
     guards,
     log: makeLogSink(app),
     ...(options.rateLimiters === undefined ? {} : { rateLimiters: options.rateLimiters }),

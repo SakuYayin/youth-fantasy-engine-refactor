@@ -82,5 +82,39 @@ export { registerAuthRoutes, DEFAULT_LOGIN_RATE_LIMIT } from './routes/auth.js'
 export type { AuthRouteDeps } from './routes/auth.js'
 export { registerSetupRoute, DEFAULT_SETUP_RATE_LIMIT } from './routes/setup.js'
 export type { SetupBody, SetupDeps, SetupResponseBody } from './routes/setup.js'
+export { registerCapabilitiesRoute } from './routes/capabilities.js'
+export type { CapabilitiesDeps } from './routes/capabilities.js'
+export { MAX_WORKSPACES_PER_USER, registerWorkspaceRoutes } from './routes/workspaces.js'
+export type { WorkspaceRouteDeps } from './routes/workspaces.js'
+export { registerSyncRoutes } from './routes/sync.js'
+export type { SyncRouteDeps } from './routes/sync.js'
+
+export {
+  CONFIG_ENTITY_TYPE,
+  DEFAULT_CHANGES_LIMIT,
+  DEFAULT_VERSIONS_LIMIT,
+  MAX_CHANGES_LIMIT,
+  MAX_OPERATIONS_ACCEPTED_BY_SCHEMA,
+  MAX_VERSIONS_LIMIT,
+  MIN_CLIENT_MAJOR,
+  PLUGIN_STATE_ENTITY_TYPE,
+  SNAPSHOT_BUCKETS,
+  SUPPORTED_ACTIONS,
+  SUPPORTED_COMMANDS,
+  SYNC_ASSETS,
+  SYNC_ENTITY_TYPES,
+  SYNC_LIMITS,
+  SYNC_PROTOCOL_MAJOR,
+  assertProtocolVersion,
+  cursorInvalidError,
+  encodeWorkspaceCursor,
+  isSyncEntityType,
+  parseLimit,
+  parseWorkspaceCursor,
+  payloadTooLargeError,
+  requireWellFormedId,
+} from './sync/protocol.js'
+export type { SyncEntityType } from './sync/protocol.js'
+
 export { registerRoutes } from './routes/index.js'
 export type { RouteDeps } from './routes/index.js'
