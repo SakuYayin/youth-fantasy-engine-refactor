@@ -16,6 +16,10 @@
     "./repositories": {
       "types": "./src/repositories/index.ts",
       "default": "./src/repositories/index.ts"
+    },
+    "./export": {
+      "types": "./src/export/index.ts",
+      "default": "./src/export/index.ts"
     }
   },
   "dependencies": {

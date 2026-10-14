@@ -5,6 +5,7 @@
  * 1. {@link ./schema/index.js} —— 打开连接、DDL 与迁移、写入前的版本闸门。
  * 2. {@link ./saveDraft/index.js} —— 本地保存用例（一次写事务）与草稿水位线。
  * 3. {@link ./repositories/index.js} —— 实体读写（P1-A3，见 `docs/项目台账.md`，已落地）。
+ * 4. {@link ./export/index.js} —— 恢复点与导出（P1-B3）：一致快照、清单、校验、恢复。
  *
  * 🔴 关键纪律（设计文档 `06-数据与本地存储.md`）：
  * - DB 执行器**独占写连接**；写事务内不得等待网络。
@@ -21,3 +22,4 @@
 export * from './schema/index.js'
 export * from './saveDraft/index.js'
 export * from './repositories/index.js'
+export * from './export/index.js'
