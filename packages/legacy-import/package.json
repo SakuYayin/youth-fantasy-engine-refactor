@@ -1,0 +1,14 @@
+{
+  "name": "@yfe/legacy-import",
+  "version": "4.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@yfe/contracts": "*",
+    "@yfe/domain": "*",
+    "@yfe/persistence-sqlite": "*"
+  }
+}
