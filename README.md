@@ -1,4 +1,4 @@
-# 青春幻想引擎 · 重构版
+# 青春幻想引擎 · 预览版
 
 > 小说创作管理应用的重构工程。原版仓库：[tgxy2026/youth-fantasy-engine](https://github.com/tgxy2026/youth-fantasy-engine)
 >
