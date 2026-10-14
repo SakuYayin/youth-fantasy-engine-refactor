@@ -2,7 +2,7 @@
 
 > 小说创作管理应用的重构工程。原版仓库：[tgxy2026/youth-fantasy-engine](https://github.com/tgxy2026/youth-fantasy-engine)
 >
-> **本仓库是重构开发仓库**，从零按设计基线重写。原版（React 18 + Electron + IndexedDB）继续可用，新版独立入口与数据位置。
+> **本仓库是预览版开发仓库**，从零按设计基线重写，**以兼容移动端为目标**。原版（React 18 + Electron + IndexedDB）继续可用，新版独立入口与数据位置。
 
 当前分支：`release/alpha-0.1.0` · 版本：`4.0.0-dev.0`
 
@@ -16,7 +16,7 @@
 
 ### 与原版的关系
 
-| | 原版 | 重构版 |
+| | 原版 | 本预览版 |
 | --- | --- | --- |
 | 仓库 | [tgxy2026/youth-fantasy-engine](https://github.com/tgxy2026/youth-fantasy-engine) | 本仓库 |
 | 前端 | React 18 | **Vue 3** |

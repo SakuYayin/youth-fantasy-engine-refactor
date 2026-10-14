@@ -114,11 +114,20 @@ export type ErrorSeverity = 'info' | 'warn' | 'error' | 'critical'
 
 const SEVERITY_BY_PREFIX: ReadonlyArray<readonly [string, ErrorSeverity]> = [
   ['VALIDATION_', 'info'],
+  // PAYLOAD_TOO_LARGE 属于 VALIDATION 类但前缀是 PAYLOAD_，必须单列。
+  ['PAYLOAD_TOO_LARGE', 'info'],
   ['AUTH_', 'warn'],
   ['PERMISSION_', 'warn'],
-  ['NOT_FOUND_', 'info'],
+  // 用 'NOT_FOUND' 而非 'NOT_FOUND_'：精确码 NOT_FOUND 自身没有下划线，
+  // 否则它会掉到兜底的 'error'，与同类码不一致。
+  ['NOT_FOUND', 'info'],
+  // --- CONFLICT 组：都是预期内业务分支，必须逐条列出 ---
   ['REVISION_CONFLICT', 'info'],
+  ['IDEMPOTENCY_KEY_REUSED', 'info'],
+  ['STATE_INVALID_TRANSITION', 'info'],
+  ['RESOURCE_LOCKED', 'info'],
   ['ALREADY_EXISTS', 'info'],
+  ['WORKSPACE_ALREADY_AUTHORITATIVE', 'info'],
   ['STORAGE_DISK_FULL', 'critical'],
   ['STORAGE_CORRUPT', 'critical'],
   ['STORAGE_SCHEMA_TOO_NEW', 'critical'],
