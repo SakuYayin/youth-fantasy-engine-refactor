@@ -1,0 +1,33 @@
+{
+  "name": "@yfe/persistence-sqlite",
+  "version": "4.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "description": "SQLite 持久化：Schema 迁移、SaveDraft 事务、Repository",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./schema": {
+      "types": "./src/schema/index.ts",
+      "default": "./src/schema/index.ts"
+    },
+    "./repositories": {
+      "types": "./src/repositories/index.ts",
+      "default": "./src/repositories/index.ts"
+    }
+  },
+  "dependencies": {
+    "@yfe/contracts": "*",
+    "@yfe/domain": "*",
+    "better-sqlite3": "^13.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  }
+}

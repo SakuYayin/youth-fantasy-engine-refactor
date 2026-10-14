@@ -1,0 +1,26 @@
+{
+  "name": "@yfe/plugin-host",
+  "version": "4.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "description": "插件宿主：Cordis 适配层，隔离上游不稳定的生命周期 API",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./host": {
+      "types": "./src/host/index.ts",
+      "default": "./src/host/index.ts"
+    }
+  },
+  "dependencies": {
+    "@yfe/contracts": "*",
+    "@yfe/plugin-sdk": "*",
+    "cordis": "4.0.0-rc.11"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  }
+}

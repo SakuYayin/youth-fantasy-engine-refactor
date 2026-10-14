@@ -32,15 +32,50 @@
 
 ## 技术选型
 
+**端与运行时**
+
+| 端 | 选型 | 说明 |
+| --- | --- | --- |
+| 桌面 | **Electron 44** + **Vue 3.5** + Vite | Windows / macOS / Linux 分平台构建；utilityProcess 跑 DB，主线程不承担耗时工作 |
+| 后端 | **Node.js 24 LTS** + **Fastify 5** + OpenAPI/JSON Schema | 模块化单体，一个服务含 API + Web 管理端 + SQLite + 内部队列；不拆微服务、不要求 Redis |
+| **移动端** | **uni-app x**（原生渲染，蒸汽模式）+ UTS | **仅 Android 首发，不做 iOS**；与桌面共用同一套 `@yfe/contracts` 与后端 API |
+
+**核心与数据**
+
 | 层 | 选型 | 说明 |
 | --- | --- | --- |
-| 语言 | TypeScript 5.9（strict） | `noUncheckedIndexedAccess` 开启 |
-| 桌面 | Electron 44 + Vue 3.5 | utilityProcess 跑 DB，主线程不承担耗时工作 |
-| 后端 | Fastify 5 + Node 24 | 模块化单体，不拆微服务 |
-| 存储 | SQLite（better-sqlite3 13） | WAL；单实例单 writer |
-| 插件 | Cordis | 固定来源 + 自有 SDK + 适配层 |
-| 编辑 | CodeMirror 6 | 中文输入法、大文档、协作友好 |
-| 测试 | Vitest 4 | 按包分 project，逻辑测试不依赖 GUI |
+| 语言 | **TypeScript 5.9（strict）** | `noUncheckedIndexedAccess` / `verbatimModuleSyntax` 开启 |
+| 业务核心 | 可移植 TypeScript 应用服务 | 桌面与后端**共用同一份业务规则**，不各写一套 |
+| 桌面/后端存储 | **SQLite + better-sqlite3 13** | WAL；数据库执行器独占写连接，业务版本与正文同事务 |
+| **移动端存储** | **Android SQLite / Room**（UTS/Kotlin 封装） | 🔴 手机**不加载 better-sqlite3**；单实例 SQLite 不允许启动多个独立 writer |
+| 插件 | **Cordis** + 自有 SDK/权限层 | 固定来源、生命周期 API 经适配层隔离，**不向第三方暴露 Cordis 类型** |
+| 编辑 | 桌面 **CodeMirror 6** + 自有 Editor Adapter；移动端原生编辑控件 | 正文以纯文本为兼容基础；桌面 Vue 组件与 CodeMirror **不直接运行在手机原生控件中** |
+| 测试 | **Vitest 4**（按包分 project）+ Playwright + Android 真机 | 逻辑测试不依赖 GUI；保存/同步/迁移/权限/恢复必须有行为测试 |
+| 分发 | 桌面分平台安装包；后端官方镜像 + Compose（linux/amd64、linux/arm64） | 首版桌面**离线可用**，无需 Node/Docker/数据库 |
+
+---
+
+## 为什么桌面端要为移动端让路
+
+本轮只交付「重构部分 + 对应后端」，但**移动端（uni-app x）是既定目标**，架构从第一天起就必须为它留出接口。以下三条是硬约束，不是建议：
+
+| # | 约束 | 原因 |
+| --- | --- | --- |
+| 1 | **业务规则不依赖任何桌面专属 API** | `packages/domain`、`packages/application`、`packages/contracts` 不得 import Electron / Node fs / better-sqlite3 / DOM。这三层必须能在手机原生运行时里跑 |
+| 2 | **持久化按接口分层，驱动可替换** | 桌面用 better-sqlite3，手机用 UTS/Kotlin 的 Android SQLite 或 Room。同一套 Repository 用例、同一套迁移语义，只换驱动 |
+| 3 | **同步协议与移动端共用** | 前端触发与后台同步共用 `workspaceId` / `deviceId` / `opId` / `cursor`；手机默认接入同一 HTTPS 后端，后台任务用 WorkManager 每工作区唯一任务 |
+
+配套的移动端原生模块接口（P4 由 UTS/Kotlin 实现，**P0 先定义契约**）：
+
+| 能力 | 接口职责 | 平台实现 |
+| --- | --- | --- |
+| `database` | 事务化命令、查询、迁移与恢复 | UTS/Kotlin SQLite 适配 |
+| `secureStore` | 密钥、设备凭据引用、撤销清理 | Android Keystore 与受保护存储 |
+| `fileAccess` | 用户选文件、导入导出、持久 URI 授权 | 系统文件选择器，不要求全盘权限 |
+| `backgroundSync` | 唯一同步任务、网络约束、重试与取消 | WorkManager |
+| `editor` | 基础输入、选区、撤销与组合态 | 内置原生编辑控件，必要时封装 `EditText` |
+
+> 移动端页面范围：作品（绑定工作区、章节概要、下载选择）、基础编辑（正文/选区/撤销/字数/冲突提示）、配置、任务、同步（配对/待上传/诊断）、设备控制。**桌面端的复杂资料编排与插件开发不移植到手机。**
 
 ---
 
@@ -49,9 +84,9 @@
 ```
 packages/
   contracts/            跨端契约：ID、错误码、实体、命令、同步协议（唯一出口，冻结后走 ADR）
-  domain/               纯领域逻辑：无 IO、无框架依赖
+  domain/               纯领域逻辑：无 IO、无框架依赖（桌面/后端/移动端共用）
   persistence-sqlite/   SQLite Schema、迁移、事务用例（SaveDraft 等）
-  application/          应用服务：串联领域与持久化，供 IPC 与 HTTP 共用
+  application/          应用服务：串联领域与持久化，供 IPC / HTTP / 移动端共用
   plugin-sdk/           插件开发接口
   plugin-host/          Cordis 适配层与生命周期
   legacy-import/        旧版数据只读导入与差异报告
@@ -60,6 +95,7 @@ services/
   server/               后端：身份、权限、同步、附件、任务
 apps/
   desktop/              Electron 桌面端（main / preload / renderer）
+  mobile/               uni-app x 移动端（P4；接口契约 P0 先定）
 deploy/                 镜像与 Compose
 docs/                   开发计划、ADR、迁移矩阵
 重构相关文档/            设计基线（13 份设计文档）

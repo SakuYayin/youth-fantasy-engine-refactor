@@ -1,0 +1,38 @@
+{
+  "name": "@yfe/application",
+  "version": "4.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "description": "应用用例层：编排领域规则与持久化，不依赖具体 UI 或全局当前作品",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./projects": {
+      "types": "./src/projects/index.ts",
+      "default": "./src/projects/index.ts"
+    },
+    "./documents": {
+      "types": "./src/documents/index.ts",
+      "default": "./src/documents/index.ts"
+    },
+    "./snapshot": {
+      "types": "./src/snapshot/index.ts",
+      "default": "./src/snapshot/index.ts"
+    },
+    "./export": {
+      "types": "./src/export/index.ts",
+      "default": "./src/export/index.ts"
+    }
+  },
+  "dependencies": {
+    "@yfe/contracts": "*",
+    "@yfe/domain": "*",
+    "@yfe/persistence-sqlite": "*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  }
+}

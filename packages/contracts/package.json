@@ -14,7 +14,8 @@
     "./entities": "./src/entities/index.ts",
     "./commands": "./src/commands/index.ts",
     "./sync": "./src/sync/index.ts",
-    "./jobs": "./src/jobs/index.ts"
+    "./jobs": "./src/jobs/index.ts",
+    "./mobile": "./src/mobile/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

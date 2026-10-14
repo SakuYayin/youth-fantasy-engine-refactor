@@ -1,0 +1,28 @@
+{
+  "name": "@yfe/plugin-sdk",
+  "version": "4.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "description": "插件 SDK：第三方插件唯一允许依赖的接口面，不暴露 Cordis 类型",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./manifest": {
+      "types": "./src/manifest/index.ts",
+      "default": "./src/manifest/index.ts"
+    },
+    "./context": {
+      "types": "./src/context/index.ts",
+      "default": "./src/context/index.ts"
+    }
+  },
+  "dependencies": {
+    "@yfe/contracts": "*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  }
+}

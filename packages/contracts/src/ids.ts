@@ -22,6 +22,8 @@ export type OutlineNodeId = Brand<string, 'OutlineNodeId'>
 export type WorldSettingId = Brand<string, 'WorldSettingId'>
 export type MaterialId = Brand<string, 'MaterialId'>
 export type AttachmentId = Brand<string, 'AttachmentId'>
+/** 附件内容 ID。与 `AttachmentId` 的区别：Asset 是**已校验发布的内容对象**，可能被多个引用共享。 */
+export type AssetId = Brand<string, 'AssetId'>
 export type SnapshotId = Brand<string, 'SnapshotId'>
 export type JobId = Brand<string, 'JobId'>
 export type UserId = Brand<string, 'UserId'>
@@ -85,6 +87,7 @@ export const newIds = {
   worldSetting: (rng?: RandomSource) => makeId<WorldSettingId>('wld', rng),
   material: (rng?: RandomSource) => makeId<MaterialId>('mat', rng),
   attachment: (rng?: RandomSource) => makeId<AttachmentId>('att', rng),
+  asset: (rng?: RandomSource) => makeId<AssetId>('ast', rng),
   snapshot: (rng?: RandomSource) => makeId<SnapshotId>('snp', rng),
   job: (rng?: RandomSource) => makeId<JobId>('job', rng),
   user: (rng?: RandomSource) => makeId<UserId>('usr', rng),
