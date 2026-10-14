@@ -21,9 +21,9 @@
       "types": "./src/permission/index.ts",
       "default": "./src/permission/index.ts"
     },
-    "./sync": {
-      "types": "./src/sync/index.ts",
-      "default": "./src/sync/index.ts"
+    "./http": {
+      "types": "./src/http/server.ts",
+      "default": "./src/http/server.ts"
     }
   },
   "dependencies": {
