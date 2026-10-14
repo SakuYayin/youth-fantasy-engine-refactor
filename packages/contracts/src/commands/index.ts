@@ -165,22 +165,29 @@ export interface DocumentUpdateOutput {
 // ---------------------------------------------------------------------------
 
 /**
- * 系统状态：启动自检与"健康"展示使用。
+ * 系统状态：启动自检与「健康」展示使用。
  *
- * 五个版本号同时暴露是刻意的：设计文档要求分别管理应用版本、
+ * 设计文档 `01-总体架构.md` 要求分别管理五个版本号：应用版本、
  * `databaseSchemaVersion`、`syncProtocolVersion`、`pluginApiVersion`、
- * 资源模板版本，排查问题时第一眼就要能看到它们的实际值。
+ * 资源模板版本。排查问题时第一眼就要能看到它们的实际值。
+ *
+ * ⚠️ `resourceTemplateVersion` 记录**资源模板包**（主题/模板/工作流包）的版本，
+ * 与上面四个版本相互独立演进（P5 才引入模板分发，此处先占位，
+ * 未装载任何模板包时为 `null`）。它与 `pluginApiVersion` 不是一回事：
+ * 后者是插件**宿主 API 的兼容契约**，前者是**内容包的修订号**。
  */
 export interface SystemStatusOutput {
   readonly appVersion: string
   readonly databaseSchemaVersion: number
   readonly syncProtocolVersion: { readonly major: number; readonly minor: number }
   readonly pluginApiVersion: string
+  /** 已装载资源模板包的版本；未装载为 `null`。 */
+  readonly resourceTemplateVersion: string | null
   /** 数据目录路径，仅供设置页展示，**不写入同步数据**。 */
   readonly databasePath: string
   readonly readOnly: boolean
   readonly lastSavedAt: UtcTimestamp | null
-  /** 未推送的操作数：UI 的"待同步"角标读这个值。 */
+  /** 未推送的操作数：UI 的「待同步」角标读这个值。 */
   readonly pendingOutboxCount: number
 }
 

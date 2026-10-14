@@ -14,10 +14,11 @@
   ],
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck:tests": "tsc -p tsconfig.tests.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
-    "verify:new": "npm run typecheck && npm run test",
+    "verify:new": "npm run typecheck && npm run typecheck:tests && npm run test",
     "dev:server": "npm run dev -w @yfe/server",
     "dev:desktop": "npm run dev -w @yfe/desktop"
   },

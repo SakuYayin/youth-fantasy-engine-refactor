@@ -144,8 +144,21 @@ export interface OperationConflict {
 /**
  * 增量变更请求。
  *
- * 游标过期（服务端保留窗口外）返回 `SYNC_CURSOR_INVALID` / HTTP 410，
- * 客户端**先保存离线分支再下载快照重放**，绝不清空未同步稿件。
+ * 🔴 **游标过期只有一种语义，但有两条表达路径，客户端必须把两者归一到同一个处理入口。**
+ *
+ * 服务端在能于「开始服务本次请求之前」判定游标落在保留窗口之外时，用
+ * HTTP 410 + `SYNC_CURSOR_INVALID`（走 `Result` 的 Err 分支）拒绝，**不返回 `ChangesOutput`**。
+ *
+ * 若服务端在流式组装过程中才发现缺口（例如游标仍可定位、但中间区段已被裁剪），
+ * 则返回 HTTP 200 + `resyncRequired: true`。
+ *
+ * 两条路径在客户端必须收敛到同一个 `handleResyncRequired()`：
+ * 先保存离线分支 → 再下载快照重放或形成冲突 → **绝不清空未同步稿件**。
+ * 只实现其中一条的客户端会在另一条路径上**静默丢弃未同步改动**——这是最危险的一类 bug，
+ * 因为它不报错、只是丢数据。
+ *
+ * ⚠️ `resyncRequired === true` 时 `changes` **必须为空**：部分应用的变更集会让客户端
+ * 处于「一半新一半旧」的状态，而这个状态无法用游标描述（缺口已经被裁剪，没有基准点）。
  */
 export interface ChangesInput {
   readonly workspaceId: WorkspaceId
@@ -170,7 +183,11 @@ export interface ChangeEntry {
 export interface ChangesOutput {
   readonly changes: readonly ChangeEntry[]
   readonly nextCursor: Cursor | null
-  /** 游标已过期，客户端必须走全量重同步。 */
+  /**
+   * 游标已过期，客户端必须走全量重同步（见 `ChangesInput` 的说明）。
+   * 🔴 为 `true` 时 `changes` 必须为空——缺口已无法用游标描述，
+   * 部分应用会让客户端卡在「一半新一半旧」且无法自愈的状态。
+   */
   readonly resyncRequired: boolean
 }
 
