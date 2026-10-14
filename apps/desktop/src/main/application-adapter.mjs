@@ -27,17 +27,14 @@
  *    UI、路由、用例层都不许再出现 better-sqlite3 或裸 SQL。这里出现的每一行 SQL
  *    都是「包出口还没提供公开函数」的权宜之计，逐条附 TODO。
  *
- * ## 三处契约缺口与各自的权宜之计
+ * ## 两处契约缺口与各自的权宜之计（ID 分叉一条已修）
  *
- * 1. **实体 ID 分叉**：用例层先生成 ID（`ApplicationIdGenerator.project()/document()`，
- *    见 `ports.ts:87-90` 的注释「返回给调用方的 ID 与写进库的 ID 必然同源」），
- *    但 repository 的 `createProject`（`repositories/projects.ts:207`）与
- *    `createDocument`（`repositories/documents.ts:328`）**不接受调用方 ID**，
- *    自己用 `newIds.x(deps.rng)` 现生成 ⇒ 落库 ID 与返回给客户端的 ID 会分叉，
- *    后续 `listDocumentTree`/`saveDraft` 会以 `NOT_FOUND_*` 失败。
- *    权宜之计：{@link pinnedRandomSource} 注入「钉住 ID 的随机源」。
- *    TODO(P1-A3)：让 repository 接受调用方 ID（或在端口回传落库 ID），
- *    然后删掉本权宜之计。
+ * 1. ~~**实体 ID 分叉**~~ **已修（R-18）**：`repositories/projects.ts` 的
+ *    `createProject(input & { projectId? })` 与 `repositories/documents.ts` 的
+ *    `createDocument(input & { documentId? })` 现在**优先使用调用方传入的 ID**，
+ *    只有不传时才 `newIds.x(deps.rng)` 自生成（供迁移脚本 / 直连测试使用）。
+ *    本文件因此把用例层生成的 `request.projectId` / `request.documentId` 原样透传，
+ *    落库 ID 与返回给客户端的 ID 必然同源——原先的「钉住随机源」已删除。
  *
  * 2. **工作区行**：`projects.workspace_id REFERENCES workspaces(id)`，且 repository
  *    在事务内额外调 `loadAliveWorkspace`（`repositories/projects.ts:139-154`）
@@ -60,41 +57,6 @@ import {
   getDocument as readDocument,
   listDocumentTree as readDocumentTree,
 } from '@yfe/persistence-sqlite/repositories';
-
-// ---------------------------------------------------------------------------
-// 权宜之计 1：钉住用例层已经生成好的实体 ID
-// ---------------------------------------------------------------------------
-
-/** `contracts/ids.ts:73` 的 `makeId()` 从 `uuid()` 去连字符后的**前 26 字符**拼实体 ID。 */
-const ID_BODY_LENGTH = 26;
-
-/**
- * 让 repository 生成出「用例请求里那个 ID」的随机源。
- *
- * `newIds.project(rng) === 'prj_' + rng.uuid().replace(/-/g,'').slice(0,26)`，
- * 因此只要 `uuid()` 返回「目标 ID 去掉 `prj_`/`doc_` 前缀后的 26 字符 + 6 个补位字符」，
- * repository 的落库 ID 就与用例返回给客户端的 ID 逐字相同。
- *
- * 形状对不上（前缀不同、长度不是 26）时**退回真随机**：宁可 ID 分叉后由后续用例
- * 报 `NOT_FOUND_*` 暴露出来，也不去猜一个可能写坏 ID 空间的字符串。
- *
- * @param {string} pinnedId 用例层生成的实体 ID
- */
-function pinnedRandomSource(pinnedId) {
-  let consumed = false;
-  return {
-    uuid() {
-      if (!consumed) {
-        consumed = true;
-        const text = typeof pinnedId === 'string' ? pinnedId : '';
-        const separator = text.indexOf('_');
-        const body = separator >= 0 ? text.slice(separator + 1) : '';
-        if (body.length === ID_BODY_LENGTH) return body.padEnd(32, '0');
-      }
-      return cryptoRandomSource.uuid();
-    },
-  };
-}
 
 // ---------------------------------------------------------------------------
 // 权宜之计 2：确保工作区行存在（TODO 归 P1-A3）
@@ -231,11 +193,14 @@ export function createSqliteApplicationPorts({ db, ids, revisions, describeDatab
               summary: request.summary,
               seedFirstChapter: request.seedFirstChapter,
               templateId: request.templateId ?? undefined,
+              // R-18：用例层先生成 projectId（幂等重放必须回同一个 ID），
+              // repository 现在原样采用它；不传时才自生成。
+              projectId: request.projectId,
             },
             {
               clock: clockAt(request.occurredAt),
-              // 钉住用例层生成的 projectId，保证「返回给客户端的 ID」与「落库的 ID」同源
-              rng: pinnedRandomSource(request.projectId),
+              // rng 只服务 repository 自己播的种子文档（「第一卷」「第 1 章」）等内部 ID
+              rng: cryptoRandomSource,
               revisionGenerator: revisions,
             },
           );
@@ -262,10 +227,12 @@ export function createSqliteApplicationPorts({ db, ids, revisions, describeDatab
               parentId: request.parentId,
               title: request.title,
               placement: request.placement,
+              // R-18：documentId 同理，用例层生成的 ID 必须原样落库
+              documentId: request.documentId,
             },
             {
               clock: clockAt(request.occurredAt),
-              rng: pinnedRandomSource(request.documentId),
+              rng: cryptoRandomSource,
               revisionGenerator: revisions,
             },
           );

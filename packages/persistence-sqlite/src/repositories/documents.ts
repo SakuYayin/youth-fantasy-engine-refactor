@@ -264,7 +264,7 @@ const DOCUMENT_SIBLING_SQL = 'workspace_id = ? AND project_id = ? AND parent_id 
  */
 export function createDocument(
   db: SqliteDatabase,
-  input: DocumentCreateInput,
+  input: DocumentCreateInput & { readonly documentId?: DocumentId },
   deps: RepositoryDeps,
 ): Result<DocumentCreateOutput> {
   const { context, projectId, kind, parentId, title, placement } = input
@@ -273,6 +273,11 @@ export function createDocument(
   if (contextErr !== null) return contextErr
   const projectResult = validateId(projectId, 'projectId', requestId)
   if (!projectResult.ok) return projectResult
+  // 🔴 调用方（用例层）预生成的 ID 必须先校验，绝不把畸形 ID 写进库（R-18）。
+  if (input.documentId !== undefined) {
+    const idResult = validateId(input.documentId, 'documentId', requestId)
+    if (!idResult.ok) return idResult
+  }
   if (!isDocumentKind(kind)) {
     return errOf('VALIDATION_FAILED', '文档种类不合法', requestId, { field: 'kind' })
   }
@@ -325,7 +330,8 @@ export function createDocument(
     )
     if (!orderKeyResult.ok) return orderKeyResult
 
-    const documentId = newIds.document(deps.rng)
+    // 🔴 优先采用调用方给的 ID（理由同 `projects.ts` 的 `createProject` / R-18）。
+    const documentId = input.documentId ?? newIds.document(deps.rng)
     const now = deps.clock.now()
     const revision = nextRevision(deps, INITIAL_REVISION_SEQ, requestId)
     insertDocumentRow(db, {

@@ -169,7 +169,7 @@ function loadAliveWorkspace(
  */
 export function createProject(
   db: SqliteDatabase,
-  input: ProjectCreateInput,
+  input: ProjectCreateInput & { readonly projectId?: ProjectId },
   deps: RepositoryDeps,
 ): Result<ProjectCreateOutput> {
   const { context } = input
@@ -196,6 +196,11 @@ export function createProject(
     return errOf('VALIDATION_FAILED', 'templateId 必须是字符串', requestId, { field: 'templateId' })
   }
 
+  // 🔴 调用方（用例层）预生成的 ID 必须先校验，绝不把畸形 ID 写进库。
+  if (input.projectId !== undefined && !isWellFormedId(input.projectId)) {
+    return errOf('VALIDATION_MALFORMED_ID', 'projectId 格式不合法', requestId, { field: 'projectId' })
+  }
+
   const name = nameResult.value
   const summary = input.summary ?? ''
   const projectType = input.templateId ?? 'full'
@@ -204,7 +209,10 @@ export function createProject(
     const workspaceErr = loadAliveWorkspace(db, context.workspaceId, requestId)
     if (workspaceErr !== null) return workspaceErr
 
-    const projectId = newIds.project(deps.rng)
+    // 🔴 优先采用调用方给的 ID：用例层必须先于端口调用生成 `projectId`（幂等重放要回
+    //    同一个 ID），本层再生成一次会让「返回给客户端的 ID」与「落库的 ID」分叉（R-18）。
+    //    不传时才自生成，服务迁移脚本与直连测试。
+    const projectId = input.projectId ?? newIds.project(deps.rng)
     const revision = nextRevision(deps, INITIAL_REVISION_SEQ, requestId)
     const now = deps.clock.now()
 
