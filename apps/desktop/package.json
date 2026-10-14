@@ -1,0 +1,32 @@
+{
+  "name": "@yfe/desktop",
+  "version": "4.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "description": "Electron 桌面宿主：main / preload / DB worker / renderer",
+  "main": "src/main/main.mjs",
+  "exports": {
+    ".": {
+      "types": "./src/shared/ipc/protocol.ts",
+      "default": "./src/shared/ipc/protocol.ts"
+    },
+    "./ipc": {
+      "types": "./src/shared/ipc/protocol.ts",
+      "default": "./src/shared/ipc/protocol.ts"
+    },
+    "./service-host": {
+      "types": "./src/main/service-host.mjs",
+      "default": "./src/main/service-host.mjs"
+    }
+  },
+  "dependencies": {
+    "@yfe/contracts": "*",
+    "@yfe/domain": "*",
+    "@yfe/persistence-sqlite": "*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "self-check": "node src/main/main.mjs --self-check"
+  }
+}

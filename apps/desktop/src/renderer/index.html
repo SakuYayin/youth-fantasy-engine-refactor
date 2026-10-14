@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <!--
+      🔴 CSP 必须写死在这里：renderer 是沙箱化的，禁止内联脚本与远程脚本。
+      占位页不引任何外部资源；接入真实框架后也不得放宽 script-src。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'"
+    />
+    <title>青春幻想引擎 · 占位页</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0; padding: 32px;
+        font: 14px/1.7 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+        background: #111318; color: #e6e8ee;
+      }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      p.sub { color: #8b93a7; margin: 0 0 24px; }
+      pre {
+        background: #1a1d25; border: 1px solid #2a2f3a; border-radius: 8px;
+        padding: 14px 16px; overflow: auto; max-height: 60vh;
+        font-family: Consolas, "Cascadia Mono", monospace; font-size: 12.5px;
+      }
+      .ok { color: #5ddc9a; } .bad { color: #ff7b72; } .dim { color: #8b93a7; }
+    </style>
+  </head>
+  <body>
+    <h1>青春幻想引擎 · 桌面宿主占位页</h1>
+    <p class="sub">
+      本页只验证「renderer → preload 白名单 → main → db-worker → SQLite」这条链路是否打通。
+      真实界面框架的选型见 <code>docs/移动端技术栈选型.md</code>（需兼容移动端）。
+    </p>
+    <pre id="out">正在探测…</pre>
+    <script src="./renderer.js"></script>
+  </body>
+</html>
