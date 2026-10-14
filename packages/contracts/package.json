@@ -1,0 +1,23 @@
+{
+  "name": "@yfe/contracts",
+  "version": "4.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "description": "跨端共享契约：ID、错误码、实体、命令、同步协议与版本常量",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./ids": "./src/ids.ts",
+    "./errors": "./src/errors.ts",
+    "./entities": "./src/entities/index.ts",
+    "./commands": "./src/commands/index.ts",
+    "./sync": "./src/sync/index.ts",
+    "./jobs": "./src/jobs/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "youth-fantasy-engine",
+  "private": true,
+  "version": "4.0.0-dev.0",
+  "description": "青春幻想引擎 · 小说创作管理应用（重构版）",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "services/*"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "verify:new": "npm run typecheck && npm run test",
+    "dev:server": "npm run dev -w @yfe/server",
+    "dev:desktop": "npm run dev -w @yfe/desktop"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

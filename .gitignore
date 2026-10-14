@@ -1,0 +1,49 @@
+# --- 依赖 ---
+node_modules/
+.npm-cache/
+.pnpm-store/
+
+# --- 构建产物 ---
+dist/
+build/
+out/
+*.tsbuildinfo
+.vite/
+coverage/
+
+# --- 本地运行时数据（绝不入库：可能含正文与凭据）---
+*.db
+*.db-wal
+*.db-shm
+data/
+logs/
+*.log
+.imports/
+
+# --- 秘密（见 04-后端与安全.md / 09-部署与运维.md）---
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*_key
+
+# --- 侦察与探针产物（不入库）---
+upstream/
+_upstream_tmp/
+_scratch/
+_abi_probe/
+.upstream.tar.gz
+debug.log
+
+# --- 编辑器与系统 ---
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# --- 测试夹具中的大文件但保留结构 ---
+!**/fixtures/**/*.json
