@@ -5,6 +5,16 @@
  * 用户硬性纪律（m00001）：**禁止同时运行一个测试**。全量测试会写同一个
  * vitest 缓存目录并争抢 CPU，两个成员同时跑会互相污染且让性能数据失去意义。
  *
+ * 🔴 持锁期间的「写冻结」纪律（2026-10-15 起，见台账 R-29）：
+ *    `.test-lock` 只能拦住"同时跑测试"，**拦不住别人改源码**。
+ *    而验收命令 `npm run typecheck` 与 `tsc -p tsconfig.tests.json` 是**跨全部 workspace** 的，
+ *    所以别人在锁内改一行源码，就可能让持有者的验收结果失效（sync-bot 实测：持锁期间
+ *    `packages/persistence-sqlite/src/export/restore.ts` 被改，行号在两次运行间从 322 漂到 325，
+ *    4a/4b 一度报 TS2304）。
+ *    ⇒ 规则：**从 acquire 到 release，除了持有者，任何人不得写仓库内任何文件**
+ *      （含源码、测试、文档、锁文件）；需要改就先等锁空闲，或与持有者串行。
+ *      只读操作（读文件、`git status`、`grep`）不受限。
+ *
  * 用法：
  *   node tools/test-lock.mjs acquire <成员名> [说明]
  *   node tools/test-lock.mjs release <成员名>
@@ -86,6 +96,7 @@ async function acquire(owner, note) {
   await handle.writeFile(payload, 'utf8')
   await handle.close()
   console.log(`测试锁已获取：owner=${owner}${note ? ` note=${note}` : ''}`)
+  console.log('🔴 写冻结：从现在到 release，除你以外任何人不得写仓库内任何文件（含源码/测试/文档）。')
   console.log('用完请执行：node tools/test-lock.mjs release ' + owner)
 }
 
