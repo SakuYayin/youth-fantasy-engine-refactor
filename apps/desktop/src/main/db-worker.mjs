@@ -71,8 +71,13 @@ function diagnose(level, message) {
 // ---------------------------------------------------------------------------
 /** @type {any} */
 let persistence;
+/** @type {any} */
+let application;
 try {
   persistence = await import('@yfe/persistence-sqlite');
+  // 🔴 业务逻辑只来自用例层：worker 自己不实现任何一条业务规则，
+  // 只负责「开库 → 装配端口 → 转发请求 → 回传 Result」。
+  application = await import('@yfe/application');
   const contracts = await import('@yfe/contracts');
   globalThis.__yfeContracts = contracts;
 } catch (thrown) {
@@ -81,17 +86,25 @@ try {
   process.exit(1);
 }
 
-const {
-  ok,
-  errOf,
-  toErrorPayload,
-  APP_VERSION,
-  DB_SCHEMA_VERSION,
-  SYNC_PROTOCOL_VERSION,
-  PLUGIN_API_VERSION,
-} = globalThis.__yfeContracts;
+const { ok, errOf, toErrorPayload, DB_SCHEMA_VERSION, systemClock } = globalThis.__yfeContracts;
 
-const { openDatabase, closeDatabase, migrate, readSchemaVersion, saveDraft, defaultSaveDraftDeps } = persistence;
+const { openDatabase, closeDatabase, migrate, readSchemaVersion } = persistence;
+
+const {
+  createApplicationDeps,
+  createApplicationIds,
+  systemRevisionGenerator,
+  saveDraft: saveDraftUseCase,
+  createProject: createProjectUseCase,
+  createDocument: createDocumentUseCase,
+  getDocument: getDocumentUseCase,
+  listDocumentTree: listDocumentTreeUseCase,
+  systemStatus: systemStatusUseCase,
+} = application;
+
+// 组装点适配器（把 application 的端口接到 persistence 的具体驱动）：
+// 它内部含静态的 `@yfe/*` 导入，所以必须等上面的解析钩子就位后再动态引入。
+const { createSqliteApplicationPorts } = await import('./application-adapter.mjs');
 
 // ---------------------------------------------------------------------------
 // 4) worker 内部状态
@@ -100,6 +113,8 @@ const { openDatabase, closeDatabase, migrate, readSchemaVersion, saveDraft, defa
 let db = null;
 /** @type {string | null} */
 let dbPath = null;
+/** @type {any} */
+let appDeps = null;
 let shuttingDown = false;
 let inFlight = 0;
 
@@ -118,11 +133,32 @@ function respond(requestId, method, result) {
   }
 }
 
-function requireDb(requestId) {
-  if (!db) {
+function requireApplication(requestId) {
+  if (!db || !appDeps) {
     return errOf('STATE_INVALID_TRANSITION', '数据库尚未打开，请先调用 open', requestId);
   }
   return null;
+}
+
+/**
+ * 装配用例依赖（`ApplicationDeps`）。
+ *
+ * **同一个** `ids` / `revisions` 必须既给用例层、又经适配器给 persistence：
+ * 用例层的 `createProject`/`createDocument` 在调端口**之前**就生成了实体 ID 并直接返回
+ * 给调用方（`application/src/ports.ts:87-90`），适配器正是靠这个共享的 `ids` 把
+ * 「返回的 ID」与「落库的 ID」钉在一起（详见 `application-adapter.mjs` 文件头权宜之计 1）。
+ */
+function buildApplicationDeps() {
+  const ids = createApplicationIds();
+  const revisions = systemRevisionGenerator;
+  const ports = createSqliteApplicationPorts({
+    db,
+    ids,
+    revisions,
+    // 运行时事实由持有连接的人（本文件）提供；库已关闭时回 null 让端口报 Err。
+    describeDatabase: () => (db ? { path: dbPath ?? '', schemaVersion: readSchemaVersion(db) } : null),
+  });
+  return createApplicationDeps(ports, { clock: systemClock, ids, revisions });
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +193,7 @@ function handleOpen(payload, requestId) {
     const report = migrate(opened);
     db = opened;
     dbPath = path;
+    appDeps = buildApplicationDeps();
     diagnose('info', `数据库已打开并迁移：path=${path} schemaVersion=${readSchemaVersion(opened)}`);
     return ok({
       path,
@@ -175,62 +212,38 @@ function handleOpen(payload, requestId) {
   }
 }
 
-function outboxCount() {
-  const row = db.prepare('SELECT COUNT(*) AS n FROM outbox').get();
-  return Number(row?.n ?? 0);
-}
-
-function lastSavedAt() {
-  const row = db.prepare('SELECT MAX(updated_at) AS t FROM documents').get();
-  return typeof row?.t === 'string' ? row.t : null;
-}
-
-function handleSystemStatus(_payload, requestId) {
-  const missing = requireDb(requestId);
+/**
+ * 需要已打开数据库的方法的统一入口。
+ *
+ * 注意它只做「开库了吗」这一件事；业务规则一条都不在这里。
+ */
+function withApplication(requestId, run) {
+  const missing = requireApplication(requestId);
   if (missing) return missing;
-  return ok({
-    appVersion: APP_VERSION,
-    databaseSchemaVersion: readSchemaVersion(db),
-    syncProtocolVersion: SYNC_PROTOCOL_VERSION,
-    pluginApiVersion: PLUGIN_API_VERSION,
-    resourceTemplateVersion: null,
-    databasePath: dbPath ?? '',
-    readOnly: false,
-    lastSavedAt: lastSavedAt(),
-    pendingOutboxCount: outboxCount(),
-  });
+  return run(appDeps);
 }
 
 /**
- * Repository 层（P1-A3 / task-7）的方法在落地前**不存在**。
- * 这里按名字动态取用：一旦 `@yfe/persistence-sqlite` 导出同名函数就自动接线，
- * 未落地时返回 `NOT_IMPLEMENTED` 而不是崩溃。
+ * 用例分派表：worker **只转发**，不实现业务。
+ *
+ * 🔴 铁律：端口/用例返回 `Err` 一律**原样上抛**给调用方。这里既不把失败改写成
+ * 成功，也不吞掉 `NOT_FOUND_*` / `VERSION_CONFLICT` / `PERMISSION_*` ——
+ * renderer 需要看到真实错误码才能给出正确的用户提示。
+ *
+ * `systemStatus` 的 payload 允许是 `null`（无读上下文）：用例只在 context
+ * **为 undefined** 时跳过上下文校验，所以这里把 null 归一成 undefined，
+ * 而不是把一个 null 上下文塞给校验器。
  */
-function callRepository(method, payload, requestId) {
-  const missing = requireDb(requestId);
-  if (missing) return missing;
-  const fn = persistence[method];
-  if (typeof fn !== 'function') {
-    return errOf('NOT_IMPLEMENTED', `${method} 尚未实现（Repository 层 P1-A3 未落地）`, requestId, { method });
-  }
-  return fn(db, payload);
-}
-
-function handleSaveDraft(payload, requestId) {
-  const missing = requireDb(requestId);
-  if (missing) return missing;
-  // 先跑草稿水位线判定，再走保存事务（saveDraft 内部按设计文档 06 的顺序执行）。
-  return saveDraft(db, payload, defaultSaveDraftDeps);
-}
-
 const DISPATCH = {
   open: handleOpen,
-  saveDraft: handleSaveDraft,
-  systemStatus: handleSystemStatus,
-  listDocumentTree: (payload, requestId) => callRepository('listDocumentTree', payload, requestId),
-  getDocument: (payload, requestId) => callRepository('getDocument', payload, requestId),
-  createProject: (payload, requestId) => callRepository('createProject', payload, requestId),
-  createDocument: (payload, requestId) => callRepository('createDocument', payload, requestId),
+  saveDraft: (payload, requestId) => withApplication(requestId, (deps) => saveDraftUseCase(deps, payload)),
+  systemStatus: (payload, requestId) =>
+    withApplication(requestId, (deps) => systemStatusUseCase(deps, payload ?? undefined)),
+  listDocumentTree: (payload, requestId) =>
+    withApplication(requestId, (deps) => listDocumentTreeUseCase(deps, payload)),
+  getDocument: (payload, requestId) => withApplication(requestId, (deps) => getDocumentUseCase(deps, payload)),
+  createProject: (payload, requestId) => withApplication(requestId, (deps) => createProjectUseCase(deps, payload)),
+  createDocument: (payload, requestId) => withApplication(requestId, (deps) => createDocumentUseCase(deps, payload)),
 };
 
 // ---------------------------------------------------------------------------
@@ -285,6 +298,7 @@ async function handleShutdown() {
     diagnose('error', `关闭数据库失败：${thrown instanceof Error ? thrown.message : String(thrown)}`);
   } finally {
     db = null;
+    appDeps = null;
     process.exit(0);
   }
 }

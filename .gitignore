@@ -36,6 +36,9 @@ _abi_probe/
 .upstream.tar.gz
 debug.log
 
+# --- 并发测试锁（见 tools/test-lock.mjs：绝不删锁文件，但绝不入库）---
+.test-lock
+
 # --- 编辑器与系统 ---
 .vscode/*
 !.vscode/extensions.json

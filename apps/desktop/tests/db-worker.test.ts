@@ -115,24 +115,19 @@ describe('db-worker 错误边界', () => {
 });
 
 describe('db-worker 用例分派', () => {
-  it('Repository 未落地时返回 NOT_IMPLEMENTED（warn 级）；落地后本用例转为全链路验收', async () => {
+  it('端到端链路：createProject → createDocument → saveDraft → getDocument 全部落到真实用例层', async () => {
     const workspaceId = 'w-selfcheck';
     const baseContext = () => ({ requestId: 'req-test', workspaceId });
 
     const created = await host.call('createProject', { context: baseContext(), name: '链路测试作品' });
 
-    if (!created.ok && created.error.code === 'NOT_IMPLEMENTED') {
-      // P1-A3（Repository 层）尚未落地：此处断言它**明确地、可恢复地**拒绝，
-      // 而不是静默成功或抛异常。task-7 合并后本分支不会再进入。
-      expect(created.error.severity).toBe('warn');
-      expect(created.error.retryable).toBe(false);
-      return;
-    }
-
+    // 用例层已接线：这里**不再**保留「未落地就早退」的分支——早退会让
+    // 「链路其实没通」伪装成通过。任何一环失败都直接断言失败。
     expect(created.ok, `createProject 应当成功：${JSON.stringify(created)}`).toBe(true);
     if (!created.ok) return;
     const bag = created.value as Record<string, any>;
-    const projectId: string | undefined = bag.project?.id ?? bag.id ?? (typeof bag === 'string' ? bag : undefined);
+    // 用例层权威形状是 `{ projectId, revision }`（contracts ProjectCreateOutput）
+    const projectId: string | undefined = bag.projectId ?? bag.project?.id ?? bag.id;
     expect(typeof projectId).toBe('string');
 
     const document = await host.call('createDocument', {
@@ -146,7 +141,8 @@ describe('db-worker 用例分派', () => {
     expect(document.ok).toBe(true);
     if (!document.ok) return;
     const docBag = document.value as Record<string, any>;
-    const documentId: string | undefined = docBag.document?.id ?? docBag.id;
+    // 用例层权威形状是 `{ documentId, revision, orderKey }`
+    const documentId: string | undefined = docBag.documentId ?? docBag.document?.id ?? docBag.id;
     expect(typeof documentId).toBe('string');
 
     const body = '中文往返测试 🙂\n第二行';

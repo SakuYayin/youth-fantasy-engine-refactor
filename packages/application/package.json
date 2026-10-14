@@ -1,35 +1,46 @@
 {
   "name": "@yfe/application",
-  "version": "4.0.0-dev.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "应用用例层：编排领域规则与持久化，不依赖具体 UI 或全局当前作品",
+  "description": "应用用例层：用例编排与持久化端口定义，不依赖具体 UI、驱动或全局当前作品",
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
-    "./projects": {
-      "types": "./src/projects/index.ts",
-      "default": "./src/projects/index.ts"
+    "./ports": {
+      "types": "./src/ports.ts",
+      "default": "./src/ports.ts"
     },
-    "./documents": {
-      "types": "./src/documents/index.ts",
-      "default": "./src/documents/index.ts"
+    "./errors": {
+      "types": "./src/errors.ts",
+      "default": "./src/errors.ts"
     },
-    "./snapshot": {
-      "types": "./src/snapshot/index.ts",
-      "default": "./src/snapshot/index.ts"
+    "./validate": {
+      "types": "./src/validate.ts",
+      "default": "./src/validate.ts"
     },
-    "./export": {
-      "types": "./src/export/index.ts",
-      "default": "./src/export/index.ts"
-    }
+    "./idempotency": {
+      "types": "./src/idempotency.ts",
+      "default": "./src/idempotency.ts"
+    },
+    "./useCases": {
+      "types": "./src/useCases/index.ts",
+      "default": "./src/useCases/index.ts"
+    },
+    "./useCases/*": {
+      "types": "./src/useCases/*.ts",
+      "default": "./src/useCases/*.ts"
+    },
+    "./*": {
+      "types": "./src/*.ts",
+      "default": "./src/*.ts"
+    },
+    "./package.json": "./package.json"
   },
   "dependencies": {
-    "@yfe/contracts": "*",
-    "@yfe/domain": "*",
-    "@yfe/persistence-sqlite": "*"
+    "@yfe/contracts": "*"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

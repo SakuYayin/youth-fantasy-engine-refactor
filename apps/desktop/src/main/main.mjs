@@ -132,8 +132,13 @@ function resolveDbPath(explicit) {
 }
 
 /**
- * 从用例输出里取实体 id。Repository 的输出形状可能是 `{project:{id}}`、`{id}` 或直接字符串，
- * 自检不预设某一种，按最常见顺序探测（真正权威形状由 task-7 的报告确定）。
+ * 从用例输出里取实体 id。用例层的权威形状是 `{projectId}` / `{documentId}`
+ * （见 `packages/contracts/src/commands/index.ts` 的 `ProjectCreateOutput` /
+ * `DocumentCreateOutput`），Repository 层则可能回 `{project:{id}}`、`{id}` 或直接字符串。
+ * 自检不预设某一种，按最常见顺序探测。
+ *
+ * 🔴 `bag[`${key}Id`]` 这一项是必须的：用例层返回的是 `projectId` 而不是 `project.id`，
+ * 少了它自检会取到 null 并**静默跳过整条链路后假绿**。
  * @param {unknown} value
  * @param {string} key
  * @returns {string | null}
@@ -141,7 +146,7 @@ function resolveDbPath(explicit) {
 function pickId(value, key) {
   if (!value || typeof value !== 'object') return typeof value === 'string' ? value : null;
   const bag = /** @type {Record<string, any>} */ (value);
-  for (const candidate of [bag[key]?.id, bag.id, bag[key], bag.entity?.id]) {
+  for (const candidate of [bag[`${key}Id`], bag[key]?.id, bag.id, bag[key], bag.entity?.id]) {
     if (typeof candidate === 'string' && candidate.length > 0) return candidate;
   }
   return null;
@@ -194,7 +199,15 @@ async function runSelfCheck(dbPath) {
     record('createProject', created.ok === true, created.ok === true ? JSON.stringify(created.value) : JSON.stringify(created.error));
     const projectId = created.ok === true ? pickId(created.value, 'project') : null;
 
-    if (projectId) {
+    if (!projectId) {
+      // 🔴 不许静默跳过：取不到 id 说明链路没跑完，必须记一条红的；
+      // 否则「依赖缺失」会伪装成 failedCount=0 的假绿。
+      record(
+        'createProject.id',
+        false,
+        `未从 createProject 输出取到 projectId：${JSON.stringify(created.ok === true ? created.value : created.error)}`,
+      );
+    } else {
       const tree = await host.call('listDocumentTree', { context: baseContext(), projectId });
       record('listDocumentTree', tree.ok === true, tree.ok === true ? JSON.stringify(tree.value) : JSON.stringify(tree.error));
 
@@ -209,7 +222,13 @@ async function runSelfCheck(dbPath) {
       record('createDocument', document.ok === true, document.ok === true ? JSON.stringify(document.value) : JSON.stringify(document.error));
       const documentId = document.ok === true ? pickId(document.value, 'document') : null;
 
-      if (documentId) {
+      if (!documentId) {
+        record(
+          'createDocument.id',
+          false,
+          `未从 createDocument 输出取到 documentId：${JSON.stringify(document.ok === true ? document.value : document.error)}`,
+        );
+      } else {
         const body = '自检正文：中文往返、emoji🙂、换行\n第二行';
         const saved = await host.call('saveDraft', {
           context: { ...baseContext(), projectId },
@@ -227,27 +246,43 @@ async function runSelfCheck(dbPath) {
         const readBack = read.ok === true ? pickBody(read.value, documentId) : null;
         record('正文往返（含中文/emoji/换行）', readBack === body, `写入=${JSON.stringify(body)} 读回=${JSON.stringify(readBack)}`);
 
-        // 乐观锁：拿旧 revision 再存一次必须冲突
-        const stale = await host.call('saveDraft', {
-          context: { ...baseContext(), projectId },
-          documentId,
-          draftSequence: 2,
-          body: '过期写入',
-          sessionId: 'self-check-session',
-        });
+        // 乐观锁双向验证：
+        // ① expectedRevision = 库内当前版本 → 必须被接受并推进 revision；
+        // ② 再用**已经过期**的 revision 写一次 → 必须被拒为 REVISION_CONFLICT。
+        // 只测②会让「CAS 没生效」和「CAS 生效」看起来一样，所以两个方向都要验。
         if (saved.ok === true && typeof saved.value?.revision === 'string') {
-          const conflicting = await host.call('saveDraft', {
-            context: { ...baseContext(), projectId, expectedRevision: saved.value.revision },
+          const currentRevision = saved.value.revision;
+          const advanced = await host.call('saveDraft', {
+            context: { ...baseContext(), projectId, expectedRevision: currentRevision },
             documentId,
-            draftSequence: 3,
-            body: '基于旧版本的写入',
+            draftSequence: 2,
+            body: '基于最新版本的写入',
             sessionId: 'self-check-session',
           });
-          record('乐观锁基线可用（旧 revision 可被接受一次）', conflicting.ok === true, JSON.stringify(conflicting.ok === true ? conflicting.value : conflicting.error));
+          record(
+            '乐观锁：expectedRevision=当前版本应被接受',
+            advanced.ok === true,
+            JSON.stringify(advanced.ok === true ? advanced.value : advanced.error),
+          );
+
+          if (advanced.ok === true) {
+            const conflicting = await host.call('saveDraft', {
+              context: { ...baseContext(), projectId, expectedRevision: currentRevision },
+              documentId,
+              draftSequence: 3,
+              body: '基于旧版本的写入',
+              sessionId: 'self-check-session',
+            });
+            const rejected = conflicting.ok === false && conflicting.error?.code === 'REVISION_CONFLICT';
+            record(
+              '乐观锁：过期 revision 必须被拒（REVISION_CONFLICT）',
+              rejected,
+              JSON.stringify(conflicting.ok === true ? conflicting.value : conflicting.error),
+            );
+          }
         } else {
-          record('乐观锁基线可用', false, `saveDraft 未返回 revision：${JSON.stringify(saved.value ?? saved.error)}`);
+          record('乐观锁：expectedRevision=当前版本应被接受', false, `saveDraft 未返回 revision：${JSON.stringify(saved.value ?? saved.error)}`);
         }
-        void stale;
       }
     }
   } catch (thrown) {

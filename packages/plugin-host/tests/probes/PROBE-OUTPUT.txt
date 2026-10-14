@@ -1,0 +1,396 @@
+﻿# Cordis 4.0.0-rc.11 探针原始输出
+# 生成命令：node packages/plugin-host/tests/probes/<name>.probe.mjs
+# 真实运行环境：v24.19.0 / npm 11.17.0
+
+
+======================================================================
+$ node packages/plugin-host/tests/probes/01-isolate.probe.mjs
+======================================================================
+cordis 版本: 4.0.0-rc.11
+
+--- A. isolate 返回的是新对象还是就地修改 ---
+  PASS     isolate() 返回新对象 (branchA !== root) => true
+  PASS     两个不同 label 的分支互不相同 => true
+  OBSERVE  root 上是否出现 demo 属性（未 provide 前） => false
+
+--- B. 同一个 name 在两个分支各自 provide：是否冲突 ---
+  PASS     分支 A provide 无异常 => null
+  PASS     分支 B provide 同名服务也无异常（不冲突） => null
+  PASS     分支 A 看到自己的实现 => "A"
+  PASS     分支 B 看到自己的实现 => "B"
+
+--- C. 未显式 isolate 的 root 能否看到任一分支的服务 ---
+  OBSERVE  root.get("svc") => undefined
+
+--- D. 同一 label 重复 isolate：是否共用同一个槽位（冲突/覆盖） ---
+  OBSERVE  a2.get("svc") 复用同 label 后可见 => "A"
+  PASS     同 label 再 provide 报错（槽位已占用） => "string"
+  OBSERVE  同 label 二次 provide 的错误原文 => "service \"svc\" has been registered at <root>"
+
+--- E. isolate 是否跨 extend 继承（链式传播） ---
+  PASS     嵌套 isolate 仍能看到外层分支的服务 => "A"
+  PASS     嵌套 isolate 是第三个新对象 => true
+
+=== probe-01-isolate: 13 checks, 0 failed ===
+EXITCODE=0
+
+======================================================================
+$ node packages/plugin-host/tests/probes/02-events.probe.mjs
+======================================================================
+
+--- A. 在 isolate 分支 A 注册普通监听，从 root / B / A 分别 emit ---
+  OBSERVE  root.emit 后 seen => ["A-listener<-from-root"]
+  OBSERVE  B.emit 后 seen => ["A-listener<-from-root","A-listener<-from-B"]
+  OBSERVE  A.emit 后 seen => ["A-listener<-from-root","A-listener<-from-B","A-listener<-from-A"]
+
+--- B. 结论判定：普通事件是否被 isolate 隔离 ---
+  OBSERVE  普通事件跨分支泄漏（B/root emit 能触发 A 的监听） => true
+  PASS     isolate 不隔离普通事件（本版本真实语义） => true
+
+--- C. {global:true} 的效果：root.emit 时是否触发 ---
+  OBSERVE  root.emit 后 globalSeen => ["B-global","A-local"]
+  PASS     global:true 的监听在 root.emit 时触发 => true
+  PASS     非 global 的监听在 root.emit 时也触发（普通 emit 不按 isolate 过滤） => true
+
+--- D. {global:true} 何时才有真实差别：带 Context.filter 的 thisArg ---
+  OBSERVE  filter 函数是否会被读取 => "function"
+  OBSERVE  带 filter(A) 的 emit 后 filteredSeen => ["A"]
+  PASS     带 filter 时只有 A 的监听触发 => "[\"A\"]"
+  OBSERVE  global:true 的 B 监听 + filter(A) 后 filteredSeen2 => ["A","B"]
+  PASS     global:true 突破 filter 过滤（仍触发） => true
+  OBSERVE  无 filter 时 A/B 都触发 => ["A","B"]
+
+--- E. 监听器 this 的身份（由 emit 的 thisArg 决定，不是注册它的 ctx） ---
+  OBSERVE  传入 thisArg 时，监听器 this === 该 thisArg => true
+  OBSERVE  监听器 this === 注册它的 ctx(A) => false
+  OBSERVE  不传 thisArg 时监听器 this 的值 => "null"
+  OBSERVE  结论：Cordis 4.0.0-rc.11 不把 ctx 作为监听器 this 自动注入 => true
+
+--- F. 监听 dispose 后是否立刻停止触发 ---
+  OBSERVE  off() 前触发次数 => 1
+  OBSERVE  off() 后触发次数 => 1
+  PASS     off() 之后不再触发 => 1
+
+=== probe-02-events: 21 checks, 0 failed ===
+EXITCODE=0
+
+======================================================================
+$ node packages/plugin-host/tests/probes/03-get.probe.mjs
+======================================================================
+
+--- A. 未注册服务的 get() 返回值 ---
+  OBSERVE  root.get("nope") => undefined
+  OBSERVE  root.get("nope", true)（strict） => undefined
+  OBSERVE  root.get("nope", false)（非 strict） => undefined
+  PASS     未注册返回 undefined => undefined
+  OBSERVE  访问不存在的属性 root.nope => undefined
+  PASS     属性访问同样返回 undefined => undefined
+
+--- B. 父注册、子可见（子 ctx 从父 extend 出来） ---
+  PASS     child.get("svc") 看到父的实现 => "root-svc"
+  OBSERVE  child.provide 之前 child.get 结果 => "root-svc"
+
+--- C. 子注册同名服务 -> 遮蔽父（shadowing），父不受影响 ---
+  OBSERVE  子 provide 同名服务的错误 => "service \"svc\" has been registered at <root>"
+  OBSERVE  说明：同一 isolate 槽位下子不能再 provide 同名服务 => "no-shadow"
+
+--- C2. 子注册同名服务但用独立 isolate：能否共存 ---
+  OBSERVE  子 isolate 分支 provide 同名服务的错误 => null
+  PASS     子 isolate 分支可以注册同名服务 => null
+  PASS     childIso.get 看到自己的实现 => "child-iso-svc"
+  PASS     root.get 仍是父的实现 => "root-svc"
+
+--- D. 兄弟分支之间的可见性（互不可见） ---
+  OBSERVE  s2.get("svc")（未注册） => undefined
+  PASS     兄弟分支看不到对方的服务 => undefined
+
+--- E. node_modules 里的服务（Context 自带） ---
+  OBSERVE  typeof root.events => "object"
+  OBSERVE  typeof root.registry => "object"
+  OBSERVE  typeof root.reflect => "object"
+  OBSERVE  typeof root.logger => "function"
+
+--- F. Service 子类注册后的可见性（Cordis 推荐写法） ---
+  OBSERVE  root.demo 是否可见 => "object"
+  OBSERVE  root.demo?.hello() => "demo-hello"
+  OBSERVE  root.get("demo") 是同一个对象 => false
+
+=== probe-03-get: 23 checks, 0 failed ===
+EXITCODE=0
+
+======================================================================
+$ node packages/plugin-host/tests/probes/04-effect-order.probe.mjs
+======================================================================
+
+--- A. 生成器形式：一次 effect 注册多个 disposer 的释放顺序 ---
+  OBSERVE  effect 返回类型 => "function"
+  OBSERVE  释放顺序（生成器 yield 顺序 1,2,3） => ["sync-3","sync-2","sync-1"]
+  PASS     释放是 LIFO（3,2,1） => "[\"sync-3\",\"sync-2\",\"sync-1\"]"
+
+--- B. 同步与异步混用：异步 disposer 是否被逐个 await ---
+  OBSERVE  offB() 返回值是 thenable => true
+  OBSERVE  offB() 同步返回后立刻的 orderB（说明是否逐个 await） => ["sync-C","async-B:start"]
+  OBSERVE  await 之后 orderB => ["sync-C","async-B:start","async-B:end","sync-A:start"]
+  PASS     释放严格 LIFO 且逐个 await（C 在 async-B 完成后才执行） => "[\"sync-C\",\"async-B:start\",\"async-B:end\",\"sync-A:start\"]"
+
+--- C. 真实插件 fiber 上的 effect 数量与 dispose 后的释放顺序 ---
+  OBSERVE  fiberC.state（ACTIVE=2） => 2
+  OBSERVE  fiberC.getEffects() 的 label 列表 => ["c1","c2","c3"]
+  OBSERVE  fiberC._disposables 数量 => 3
+  OBSERVE  fiber.dispose() 后 orderC => ["effect-3","effect-2","effect-1"]
+  OBSERVE  fiber.dispose() 后 fiberC.state（DISPOSED=4） => 4
+
+--- D. 同一 fiber 上三个异步 effect：并发还是串行释放 ---
+  OBSERVE  fiber.dispose() 耗时 ms（3×20ms：≈20 说明并发，≈60 说明串行） => 29
+  OBSERVE  orderD => ["e3:start","e2:start","e1:start","e3:end","e2:end","e1:end"]
+
+--- E. 已 dispose 的插件 fiber 上再建 effect 的行为 ---
+  OBSERVE  已 dispose 的 fiber 上 effect() 抛错 => "Error: cannot create effect on inactive context (code=INACTIVE_EFFECT)"
+  PASS     抛 CordisError.INACTIVE_EFFECT => true
+
+--- F. 同一 off 重复调用的幂等性 ---
+  OBSERVE  同一个 off 调用 3 次后的执行次数 => 1
+  PASS     disposer 只执行一次（epoch 幂等） => 1
+
+=== probe-04-effect-order: 18 checks, 0 failed ===
+EXITCODE=0
+
+======================================================================
+$ node packages/plugin-host/tests/probes/05-dispose-failure.probe.mjs
+======================================================================
+
+--- A. 同步调用 off()：中间 disposer 抛错时兄弟 disposer 还执行吗 ---
+  OBSERVE  同步调用 offA() 是否抛出 => "Error: boom-s2"
+  OBSERVE  orderA（LIFO：s3 先跑，s2 抛错，s1 是否还执行） => ["s3","s2:throw"]
+  PASS     同步 dispose 时抛错直接逃逸（不被吞掉） => "Error: boom-s2"
+  PASS     抛错中断同一 effect 内剩余 disposer（s1 未执行） => false
+
+--- B. 通过 thenable 协议 await off()：disposer 会被执行吗 ---
+  OBSERVE  await offB 的结果 => "string"
+  OBSERVE  await offB 是否触发 disposer（orderB） => []
+  PASS     await wrapper 不会触发 disposer（上游 then 实现缺陷：只把 disposeAsync 当值返回，未调用） => 0
+  OBSERVE  🛑 影响：适配层绝不能依赖 await effectWrapper 来释放资源，必须显式调用 wrapper() => true
+  OBSERVE  显式调用 offB2() 的抛错 => "Error: boom-x2"
+  OBSERVE  显式调用的 orderB2 => ["x3","x2:throw"]
+  PASS     显式调用能把 disposer 抛错暴露给调用方 => "Error: boom-x2"
+
+--- C. fiber 级：一个 effect 的 disposer 抛错，其他 effect 是否继续释放 ---
+  OBSERVE  fiberC.dispose() await 结果 => "resolved"
+  OBSERVE  orderC => ["c3-ok","c2-throw","c1-ok"]
+  PASS     抛错的 disposer 不阻断其他 effect（c1/c3 都执行） => true
+  PASS     fiber.dispose() 不 reject（错误被 logger.error 吞掉） => "resolved"
+  OBSERVE  被吞掉的错误日志 => ["Error:boom-c2"]
+  PASS     错误确实进了 logger.error => true
+
+--- D. 永久挂起的 disposer：是否使 fiber.dispose() 永不 settle ---
+  OBSERVE  含永久挂起 disposer 时 fiber.dispose() 的结果（800ms 超时观察） => "<<TIMEOUT after 800ms: D>>"
+  OBSERVE  orderD（挂起前已执行的部分） => ["d3-ok","d1-ok"]
+  PASS     永久挂起的 disposer 使 fiber.dispose() 永不 settle => "<<TIMEOUT after 800ms: D>>"
+  PASS     永久挂起只卡住它自己那条链，兄弟 effect 仍完成（并发释放） => true
+  OBSERVE  fiberD.state（dispose 未完成时：UNLOADING=5） => 5
+
+--- E. 永久挂起 vs 抛错后 fiber.state 对比 ---
+  OBSERVE  fiberC.state（抛错、dispose 完成后） => 4
+  OBSERVE  fiberD.state（挂起、dispose 未完成） => 5
+
+--- F. 单个 effect 内永久挂起：会卡住它后面的兄弟吗 ---
+  OBSERVE  offF 的结果 => "<<TIMEOUT after 800ms: F>>"
+  OBSERVE  orderF（LIFO：f3 先跑，然后挂在中间，f1 是否执行） => ["f3"]
+  PASS     同一 effect 内挂起会卡住后续兄弟（f1 未执行） => "<<TIMEOUT after 800ms: F>>"
+
+=== probe-05-dispose-failure: 27 checks, 0 failed ===
+EXITCODE=0
+
+======================================================================
+$ node packages/plugin-host/tests/probes/06-extend.probe.mjs
+======================================================================
+
+--- A. extend() 返回值与原对象的关系 ---
+  OBSERVE  extend() 返回新对象 (child !== root) => true
+  OBSERVE  child.foo => 42
+  OBSERVE  root.foo（原对象是否被就地修改） => undefined
+  OBSERVE  root 上是否有 own property foo => false
+  PASS     extend() 返回新对象，不就地修改原对象 => undefined
+  PASS     新对象能看到 meta 属性 => 42
+
+--- B. 原型链关系 ---
+  OBSERVE  Object.getPrototypeOf(child) === root(裸对象)? => true
+  OBSERVE  root 在 child 的原型链上 => true
+  OBSERVE  child 能看到 root 上后加的服务 => 1
+
+--- C. meta 属性的 getter/setter 描述符是否被原样搬运 ---
+  OBSERVE  通过子对象 set 触发原 getter/setter => 7
+  OBSERVE  通过子对象 get 读到 => 7
+  OBSERVE  原 meta 对象上的 counter 描述符仍有 get => "function"
+
+--- D. 对子对象直接赋值新属性：是否影响父 ---
+  OBSERVE  child.added => "x"
+  OBSERVE  root.added（父是否受影响） => undefined
+  PASS     子对象新增属性不污染父 => undefined
+
+--- E. 嵌套 extend 链的层级 ---
+  OBSERVE  c2.lvl（继承自 c1） => 1
+  OBSERVE  c2.lvl2 => 2
+  OBSERVE  c2 !== c1 => true
+  OBSERVE  c1.lvl2（子属性不回流父） => undefined
+  PASS     嵌套 extend 单向继承 => undefined
+
+--- F. extend 是否复制 Symbol 属性 ---
+  OBSERVE  Symbol 属性可读 => "sym-value"
+  PASS     extend 保留 Symbol 属性 => "sym-value"
+
+--- G. 非 Context 对象 extend 的结果是否仍是 Context ---
+  OBSERVE  Context.is(child) => true
+  OBSERVE  child instanceof Context => true
+  OBSERVE  child.fiber 是否存在（extend 不新建 fiber） => true
+
+--- H. 与 isolate/extend 的交互：extend 之后 isolate 的链 ---
+  OBSERVE  extend 之后仍保留 isolate 槽位（同 label 可见同一服务） => "iso1"
+  PASS     extend 保留 isolate 继承 => "iso1"
+
+=== probe-06-extend: 27 checks, 0 failed ===
+EXITCODE=0
+
+======================================================================
+$ node packages/plugin-host/tests/probes/07-plugin-lifecycle.probe.mjs
+======================================================================
+
+--- A. ctx.plugin() 的返回值形状 ---
+  OBSERVE  wrapper 自身 own keys => ["then"]
+  OBSERVE  wrapper.state（经原型链透传） => 1
+  OBSERVE  await wrapper 得到的类型 => "Fiber"
+  OBSERVE  wrapper === await wrapper => false
+  PASS     awaited 是真实 Fiber、与 wrapper 不同一 => false
+
+--- B. 插件回调抛错：await ctx.plugin() 是否 reject ---
+  OBSERVE  wrapperB.state（抛错后，FAILED=3） => 1
+  OBSERVE  await wrapperB 的结果 => "Error: activate-boom"
+  PASS     🛑 激活抛错时 await ctx.plugin() 会 reject（适配层可据此判定失败） => "Error: activate-boom"
+  OBSERVE  reject 时无法取得真实 fiber（fiberB 仍为 null） => true
+  OBSERVE  但 wrapper 上仍可读到 state => 3
+  PASS     wrapper.state 反映 FAILED => 3
+  OBSERVE  logger.error 是否也收到该错误 => true
+
+--- C. 异步 activate 抛错 ---
+  OBSERVE  异步 activate 抛错时 await 的结果 => "Error: async-activate-boom"
+  PASS     异步激活失败同样 reject => "Error: async-activate-boom"
+
+--- D. inject 依赖未满足时插件是否执行、await 是否阻塞 ---
+  OBSERVE  插件体是否执行 => false
+  OBSERVE  wrapperD.state（PENDING=0） => 0
+  OBSERVE  wrapperD.inject 的键 => ["lateService"]
+  OBSERVE  await 一个 PENDING 插件是否立即 settle（而非等待依赖） => "立即 settle"
+  PASS     🛑 await ctx.plugin() 对依赖未满足的插件立即 settle（不会等依赖） => "立即 settle"
+  OBSERVE  settle 后是否执行 => false
+  OBSERVE  settle 后的 state => undefined
+  OBSERVE  fiberD.inject => []
+
+--- E. 依赖补齐后是否自动激活 ---
+  OBSERVE  补齐前 ranD => false
+  OBSERVE  补齐后 ranD => true
+  PASS     依赖补齐后自动激活（适配层必须显式探测，不能只 await） => true
+
+--- F. 一个插件激活失败后，宿主能否继续加载其它插件 ---
+  OBSERVE  失败插件之后的新插件是否执行 => ["ok-plugin-activated"]
+  PASS     🛑 单个插件激活失败不阻断宿主加载其它插件 => 1
+  OBSERVE  okWrapper.state（ACTIVE=2） => 2
+
+--- G. 对 FAILED 的插件执行 dispose 是否可用 ---
+  OBSERVE  dispose 一个激活失败的插件的结果 => "resolved"
+  OBSERVE  dispose 后 wrapperB.state（DISPOSED=4） => 3
+  PASS     激活失败的插件可以被正常 dispose（清理入口可用） => null
+
+--- H. 重复 dispose 同一个 fiber 是否安全 ---
+  OBSERVE  第二次 dispose 的结果 => "resolved"
+  OBSERVE  第二次 dispose 后 state => 3
+  PASS     重复 dispose 安全（幂等，不抛错） => null
+
+--- I. 插件 deactivate（disposer）抛错是否影响 fiber 状态 ---
+  OBSERVE  dispose 后 state（DISPOSED=4） => 4
+  OBSERVE  抛错日志 => ["Error:deactivate-boom"]
+  PASS     deactivate 抛错被吞掉，fiber 仍进入 DISPOSED => 4
+
+=== probe-07-plugin-lifecycle: 37 checks, 0 failed ===
+EXITCODE=0
+
+======================================================================
+$ node packages/plugin-host/tests/probes/08-wrapper-hazards.probe.mjs
+======================================================================
+
+--- A. wrapper.dispose() 的 this 绑定 ---
+  OBSERVE  wrapper.dispose 与真实 fiber 的 dispose 是同一个函数 => true
+  OBSERVE  dispose 前 realFiber.uid => 1
+  OBSERVE  dispose 前 wrapper 自身是否有 uid（hasOwn） => false
+  OBSERVE  wrapper.dispose() 结果 => "resolved"
+  OBSERVE  dispose 后 realFiber.uid（null 才是真释放） => null
+  OBSERVE  dispose 后 wrapper.uid（undefined 即未写入 wrapper） => null
+  OBSERVE  dispose 后 wrapper 自身是否有 uid（hasOwn） => false
+  OBSERVE  dispose 后 realFiber.state => 4
+  OBSERVE  realFiber._getState() 的真值 => 4
+  OBSERVE  realFiber 是否仍在 parent 的 runtime.fibers 里 => false
+  OBSERVE  🛑 结论：wrapper.dispose() 的 this 是 wrapper 还是真实 fiber => "真实 fiber"
+
+--- B. 真实 fiber 上的 dispose 是否正确释放 ---
+  OBSERVE  dispose 前 real2.uid 非 null => true
+  OBSERVE  real2.dispose.call(real2) 后 real2.uid => null
+  OBSERVE  real2.state（4=DISPOSED） => 4
+  OBSERVE  real2._getState()（4） => 4
+  PASS     FAILED fiber 被正确 dispose 后 state 变为 DISPOSED => 4
+  PASS     _getState() 与 state 一致 => 4
+  OBSERVE  ⚠️ 例外：若先 await 到 reject 再 dispose，state 字段会停在 3（见探针 09 C 段） => "await reject 后 dispose：state=3 vs _getState=4"
+
+--- C. 成功插件的 fiber 在 dispose 后 state 是否正确 ---
+  OBSERVE  dispose 前 real3.state（ACTIVE=2） => 1
+  OBSERVE  dispose 后 real3.state（期望 4） => 4
+  OBSERVE  dispose 后 real3._getState() => 4
+  PASS     成功插件的 fiber dispose 后 state 正确变为 DISPOSED => 4
+
+--- D. ctx.plugin() 返回的 wrapper 上可安全调用的 API 清单 ---
+  OBSERVE  wrapper.update 是否可用（从原型继承，但 this 绑定错误） => "function"
+  OBSERVE  Object.keys(wrapper4) => ["then"]
+  OBSERVE  可用且安全的方式：对真实 fiber 调用 => ["constructor","assertActive","_resolve","_execute","effect","getEffects","_getState","_updateState","_checkImpl","_refresh","_setEpoch","_reload","_unload","await","restart","update"]
+
+=== probe-08-wrapper-hazards: 25 checks, 0 failed ===
+EXITCODE=0
+
+======================================================================
+$ node packages/plugin-host/tests/probes/09-state-machine.probe.mjs
+======================================================================
+
+--- A. 抛错插件：await 前 / await 后 / dispose 后的 state 序列 ---
+  OBSERVE  构造后立刻 wrapper.state => 1
+  OBSERVE  构造后立刻 real._getState() => 2
+  OBSERVE  构造后立刻 real._error => undefined
+  OBSERVE  await reject 后 wrapper.state => 3
+  OBSERVE  await reject 后 real._getState() => 3
+  OBSERVE  await reject 后 real.uid => 1
+  OBSERVE  dispose 后 wrapper.state => 3
+  OBSERVE  dispose 后 real._getState() => 4
+  OBSERVE  dispose 后 real.uid => null
+
+--- B. 抛错插件但不 await，直接 dispose ---
+  OBSERVE  dispose 前 real2.state => 1
+  OBSERVE  dispose 后 real2.state => 4
+  OBSERVE  dispose 后 real2._getState() => 4
+
+--- C. 结论：state 字段与 _getState() 何时分歧 ---
+  OBSERVE  分歧案例 => ["await 后 dispose: state=3 vs _getState=4"]
+
+--- D. 可靠判定：await wrapper 的 reject 是权威信号吗 ---
+  OBSERVE  await 判定结果 => "rejected: boom-d"
+  PASS     await wrapper 是可靠的激活失败信号 => "rejected: boom-d"
+
+--- E. 成功插件 + 依赖缺失插件的 await 行为对照 ---
+  OBSERVE  成功插件 await 结果 => "resolved"
+  OBSERVE  依赖缺失插件 await 结果 => "resolved"
+  OBSERVE  🛑 两者都 resolve ⇒ await 无法区分「已激活」与「依赖未满足」 => true
+  PASS     依赖缺失插件 await 也 resolve => "resolved"
+  OBSERVE  依赖缺失插件 real.state（PENDING=0） => 0
+  OBSERVE  依赖缺失插件 real._getState() => 0
+  OBSERVE  fiber.inject 键（用于显式依赖检查） => ["missing"]
+
+--- F. 因此适配层必须同时检查：await reject + _getState() === ACTIVE ---
+  OBSERVE  最终判定规则 => "await reject → PLUGIN_ACTIVATION_FAILED；resolve 且 state===2 → 已激活；resolve 且 state===0 → 依赖未满足/拒绝激活"
+
+=== probe-09-state-machine: 23 checks, 0 failed ===
+EXITCODE=0
