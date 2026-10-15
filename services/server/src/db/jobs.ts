@@ -762,10 +762,46 @@ export function heartbeatJob(db: ServerDb, request: HeartbeatJobRequest, deps: J
 // 终态迁移
 // ---------------------------------------------------------------------------
 
+/**
+ * 租约栅栏（fencing）：确认"这行任务现在仍归我"。
+ *
+ * 为什么必须有：领取用租约，租约过期后任何人都能重领同一条任务。如果回报终态时只带
+ * `jobId`，那么**租约已失效的原执行者**仍能把行写成 `succeeded`/`failed` —— 同一任务被
+ * 两个 worker 执行（副作用重复），第二个收尾时反而被判成 stale，真相被掩盖。
+ *
+ * 语义：
+ * - `leaseOwner` 不传 = 不做栅栏（迁移脚本、单测里对没有租约的 `queued` 任务判死等场景）。
+ * - 传了则 `lease_owner` 必须逐字相同，`attempt`（若同时传）也必须相同 → 否则
+ *   `RESOURCE_LOCKED`，**且该行零变化**。
+ * - 判定顺序：**先状态迁移、再租约栅栏**。终态任务一律报 `STATE_INVALID_TRANSITION`
+ *   （与"是不是你的"无关，反正一个字都不会写）；只有当"这次写入本来会被接受"时，
+ *   才需要问"这行现在还归我吗" —— 那才是栅栏要拦的迟到回报。
+ */
+function assertLeaseFence(
+  row: JobRow,
+  request: { readonly leaseOwner?: string; readonly attempt?: number },
+  deps: JobRepoDeps,
+): void {
+  if (request.leaseOwner === undefined) return
+  if (row.lease_owner === null) {
+    throw resourceLocked(deps, { jobId: row.job_id, reason: 'no_lease' })
+  }
+  if (row.lease_owner !== request.leaseOwner) {
+    throw resourceLocked(deps, { jobId: row.job_id, reason: 'not_owner' })
+  }
+  if (request.attempt !== undefined && row.attempt !== request.attempt) {
+    throw resourceLocked(deps, { jobId: row.job_id, reason: 'attempt_mismatch' })
+  }
+}
+
 export interface CompleteJobRequest {
   readonly jobId: JobId
   readonly result?: Readonly<Record<string, unknown>> | null
   readonly outputRef?: string | null
+  /** 租约所有者（fencing）。执行器路径必须传，见 `assertLeaseFence`。 */
+  readonly leaseOwner?: string
+  /** 本次尝试序号（fencing）。与 `claimJob` 返回的 `attempt` 对应。 */
+  readonly attempt?: number
 }
 
 /**
@@ -775,6 +811,7 @@ export interface CompleteJobRequest {
  *   ——"取消是请求不是事实"的另一半：执行器跑完了也不能把已请求取消的任务标成成功。
  * - 其它非法入口（例如对 `queued` 任务调它：这条任务根本没有租约，不该有人回报完成）
  *   一律 `STATE_INVALID_TRANSITION`，且在写之前判定 → 该行零变化。
+ * - 传了 `leaseOwner`：状态迁移合法之后再过租约栅栏，租约已易主 → `RESOURCE_LOCKED` 且零变化。
  */
 export function completeJob(db: ServerDb, request: CompleteJobRequest, deps: JobRepoDeps): Job {
   const at = deps.now()
@@ -785,6 +822,7 @@ export function completeJob(db: ServerDb, request: CompleteJobRequest, deps: Job
     if (!canTransitionJob(from, target)) {
       throw invalidTransition(deps, { from, to: target })
     }
+    assertLeaseFence(row, request, deps)
     db.prepare(
       `UPDATE jobs
           SET status = ?, result_json = ?, output_ref = COALESCE(?, output_ref),
@@ -804,9 +842,18 @@ export interface FailJobRequest {
   /** 内部诊断文本：**不对外返回**，只落库。 */
   readonly errorMessage: string
   readonly checkpoint?: string | null
+  /** 租约所有者（fencing）。执行器路径必须传，见 `assertLeaseFence`。 */
+  readonly leaseOwner?: string
+  /** 本次尝试序号（fencing）。与 `claimJob` 返回的 `attempt` 对应。 */
+  readonly attempt?: number
 }
 
-/** 执行器失败：落终态 `failed` + `error_code`/`error_message`（幂等重试不做，见报告）。 */
+/**
+ * 执行器失败：落终态 `failed` + `error_code`/`error_message`（幂等重试不做，见报告）。
+ *
+ * 传了 `leaseOwner`：状态迁移合法之后再过租约栅栏 —— **租约已被别人接手的任务，
+ * 原执行者的失败回报不能落库**，否则会把别人正在跑的任务判死。
+ */
 export function failJob(db: ServerDb, request: FailJobRequest, deps: JobRepoDeps): Job {
   const at = deps.now()
   return tx(db, () => {
@@ -815,6 +862,7 @@ export function failJob(db: ServerDb, request: FailJobRequest, deps: JobRepoDeps
     if (!canTransitionJob(from, 'failed')) {
       throw invalidTransition(deps, { from, to: 'failed' })
     }
+    assertLeaseFence(row, request, deps)
     db.prepare(
       `UPDATE jobs
           SET status = 'failed', error_code = ?, error_message = ?,

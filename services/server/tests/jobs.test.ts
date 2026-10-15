@@ -631,6 +631,97 @@ describe('状态机：非法迁移零写入', () => {
 })
 
 // ---------------------------------------------------------------------------
+// 租约栅栏（fencing）：迟到的回报不能改写别人的任务
+// ---------------------------------------------------------------------------
+
+describe('租约栅栏：迟到的终态回报被 RESOURCE_LOCKED 拦下', () => {
+  async function claimingHarness(owner: string, leaseMs = 30_000) {
+    const h = await makeJobsHarness()
+    const { userId, workspaceId } = await seedOwner(h.db, h.clock.now())
+    const deps = repoDeps(h.clock)
+    const { jobId } = submitJob(
+      h.db,
+      { workspaceId, kind: JOB_KIND, executor: JOB_EXECUTOR, payload: {}, submittedByUserId: userId },
+      deps,
+    )
+    const claim = must(claimJob(h.db, { owner, leaseMs }, deps), `${owner} 的领取`)
+    return { h, deps, jobId, attempt: claim.attempt }
+  }
+
+  it('租约过期被重领后，原 worker 的 completeJob → RESOURCE_LOCKED 且整行不变', async () => {
+    const { h, deps, jobId, attempt } = await claimingHarness('worker-a', 10_000)
+    // worker-a 还在跑，租约到期 → worker-b 领走同一条任务（attempt 变 2）。
+    h.clock.advance(10_000)
+    const stolen = must(claimJob(h.db, { owner: 'worker-b', leaseMs: 10_000 }, deps), 'worker-b 的领取')
+    expect(stolen.attempt).toBe(2)
+    const before = jobRow(h.db, jobId)
+    const outputsBefore = countJobOutputs(h.db, jobId)
+
+    expect(
+      codeOf(() => completeJob(h.db, { jobId, leaseOwner: 'worker-a', attempt, result: { text: '迟到的产物' } }, deps)),
+    ).toBe('RESOURCE_LOCKED')
+    // 没有栅栏的话这里会被写成 succeeded：同一条任务跑两遍、产物互相覆盖。
+    expect(jobRow(h.db, jobId)).toEqual(before)
+    expect(countJobOutputs(h.db, jobId)).toBe(outputsBefore)
+    expect(field(h.db, jobId, 'result_json')).toBeNull()
+
+    // 真正的持有者仍然能正常收尾。
+    const done = completeJob(h.db, { jobId, leaseOwner: 'worker-b', attempt: stolen.attempt }, deps)
+    expect(done.status).toBe('succeeded')
+  })
+
+  it('原 worker 的迟到 failJob 不会把别人的任务判死', async () => {
+    const { h, deps, jobId, attempt } = await claimingHarness('worker-a', 10_000)
+    h.clock.advance(10_000)
+    const stolen = must(claimJob(h.db, { owner: 'worker-b', leaseMs: 10_000 }, deps), 'worker-b 的领取')
+    const before = jobRow(h.db, jobId)
+
+    expect(
+      codeOf(() =>
+        failJob(h.db, { jobId, errorCode: 'JOB_EXECUTOR_FAILED', errorMessage: '迟到的失败', leaseOwner: 'worker-a', attempt }, deps),
+      ),
+    ).toBe('RESOURCE_LOCKED')
+    expect(jobRow(h.db, jobId)).toEqual(before)
+    expect(field(h.db, jobId, 'error_message')).toBeNull()
+
+    const failed = failJob(
+      h.db,
+      { jobId, errorCode: 'JOB_EXECUTOR_FAILED', errorMessage: '真的失败', leaseOwner: 'worker-b', attempt: stolen.attempt },
+      deps,
+    )
+    expect(failed.status).toBe('failed')
+    expect(field(h.db, jobId, 'error_message')).toBe('真的失败')
+  })
+
+  it('attempt 不匹配 → RESOURCE_LOCKED（同一个 owner 名重用也要拦）', async () => {
+    const { h, deps, jobId, attempt } = await claimingHarness('worker-a', 10_000)
+    h.clock.advance(10_000)
+    const second = must(claimJob(h.db, { owner: 'worker-a', leaseMs: 10_000 }, deps), 'worker-a 的第二次领取')
+    expect(second.attempt).toBe(2)
+
+    // 同一个 worker 名、但 attempt 是上一轮的：这是"上一次执行"的迟到回报，不能落库。
+    expect(codeOf(() => completeJob(h.db, { jobId, leaseOwner: 'worker-a', attempt }, deps))).toBe('RESOURCE_LOCKED')
+    expect(field(h.db, jobId, 'status')).toBe('running')
+    expect(completeJob(h.db, { jobId, leaseOwner: 'worker-a', attempt: second.attempt }, deps).status).toBe('succeeded')
+  })
+
+  it('不传 leaseOwner 时保持旧行为（迁移脚本与无租约路径）', async () => {
+    const h = await makeJobsHarness()
+    const { userId, workspaceId } = await seedOwner(h.db, h.clock.now())
+    const deps = repoDeps(h.clock)
+    const { jobId } = submitJob(
+      h.db,
+      { workspaceId, kind: JOB_KIND, executor: JOB_EXECUTOR, payload: {}, submittedByUserId: userId },
+      deps,
+    )
+    // queued 无租约：仍然是状态迁移错误，而不是 RESOURCE_LOCKED。
+    expect(codeOf(() => completeJob(h.db, { jobId }, deps))).toBe('STATE_INVALID_TRANSITION')
+    // queued → failed 合法且不需要租约身份。
+    expect(failJob(h.db, { jobId, errorCode: 'JOB_EXECUTOR_FAILED', errorMessage: '派发前失败' }, deps).status).toBe('failed')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 取消
 // ---------------------------------------------------------------------------
 
@@ -1115,6 +1206,100 @@ describe('运行器', () => {
       error_code: 'JOB_CANCELLED',
       error_message: '外层判死',
     })
+  })
+
+  it('runOnce：执行期间租约被重领 → 迟到的成功回报作废（stale / RESOURCE_LOCKED）', async () => {
+    const h = await makeJobsHarness()
+    const { userId, workspaceId } = await seedOwner(h.db, h.clock.now())
+    const deps = repoDeps(h.clock)
+    const { jobId } = submitJob(
+      h.db,
+      { workspaceId, kind: JOB_KIND, executor: JOB_EXECUTOR, payload: {}, submittedByUserId: userId },
+      deps,
+    )
+    const runner = createJobRunner({
+      db: h.db,
+      clock: h.clock,
+      owner: 'worker-runner',
+      leaseMs: 10_000,
+      executor: () => {
+        // 执行器跑得太久：租约到期后另一个 worker 领走了同一条任务（attempt 变 2）。
+        h.clock.advance(10_000)
+        const stolen = must(claimJob(h.db, { owner: 'worker-thief', leaseMs: 10_000 }, deps), 'worker-thief 的领取')
+        expect(stolen.attempt).toBe(2)
+      },
+    })
+
+    const outcome = await runner.runOnce()
+    if (outcome.kind !== 'stale') throw new Error(`期望 stale，实际是 ${outcome.kind}`)
+    expect(outcome.reason).toBe('RESOURCE_LOCKED')
+    // 任务仍归 worker-thief，且没有被我们写成 succeeded。
+    expect(jobRow(h.db, jobId)).toMatchObject({ status: 'running', lease_owner: 'worker-thief', result_json: null })
+  })
+
+  it('runOnce：执行期间自动续租（长任务不会被重领）', async () => {
+    const h = await makeJobsHarness()
+    const { userId, workspaceId } = await seedOwner(h.db, h.clock.now())
+    const deps = repoDeps(h.clock)
+    const { jobId } = submitJob(
+      h.db,
+      { workspaceId, kind: JOB_KIND, executor: JOB_EXECUTOR, payload: {}, submittedByUserId: userId },
+      deps,
+    )
+    // leaseMs=900 → heartbeatIntervalMs=300 → 续租定时器 300ms 一跳。
+    let expiryDuringRun: unknown = null
+    const runner = createJobRunner({
+      db: h.db,
+      clock: h.clock,
+      owner: 'worker-hb',
+      leaseMs: 900,
+      executor: async () => {
+        // 时钟前进 500ms（还没到 T0+900 的到期点），然后真的等过一跳续租。
+        h.clock.advance(500)
+        await new Promise<void>((resolve) => {
+          setTimeout(() => {
+            resolve()
+          }, 500)
+        })
+        expiryDuringRun = field(h.db, jobId, 'lease_expires_at')
+      },
+    })
+
+    const outcome = await runner.runOnce()
+    expect(outcome.kind).toBe('succeeded')
+    // T0+500 时心跳把到期点推到 T0+1400；没有自动续租的话这里还是 T0+900。
+    expect(expiryDuringRun).toBe('2026-01-01T00:00:01.400Z')
+  })
+
+  it('start()：未知持久化错误不会让循环 promise 拒绝，而是记日志继续', async () => {
+    const h = await makeJobsHarness()
+    const { userId, workspaceId } = await seedOwner(h.db, h.clock.now())
+    const deps = repoDeps(h.clock)
+    submitJob(h.db, { workspaceId, kind: JOB_KIND, executor: JOB_EXECUTOR, payload: {}, submittedByUserId: userId }, deps)
+    const lines: Record<string, unknown>[] = []
+    let calls = 0
+    const runner = createJobRunner({
+      db: h.db,
+      clock: h.clock,
+      owner: 'worker-loop-err',
+      leaseMs: 60_000,
+      pollIntervalMs: 5,
+      log: (line) => lines.push(line),
+      executor: () => {
+        calls += 1
+        // 制造"未知持久化错误"：删掉事件表，之后 `failJob` 里 `appendStatusEvent` 抛的是
+        // 驱动错误（不是 ContractError）→ `persistFailure` 照契约向上抛 → 走循环的 catch。
+        h.db.exec('DROP TABLE job_outputs')
+        throw new Error('执行器炸了')
+      },
+    })
+
+    const loop = runner.start()
+    await waitFor(() => lines.some((line) => line['event'] === 'job.loop_error'), '循环记录了未知错误')
+    runner.stop()
+    await loop // 循环 promise 若拒绝，这里会抛 → 测试失败
+
+    expect(calls).toBe(1)
   })
 
   it('stop() 之后不再领取，任务留在队列里', async () => {

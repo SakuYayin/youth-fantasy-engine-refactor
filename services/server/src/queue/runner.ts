@@ -12,13 +12,19 @@
  *
  * 崩溃安全的含义：进程在 `executor()` 中途被 kill，任务仍然是 `running` + 租约，
  * 直到 `lease_expires_at` 过去才会被另一个 worker 重新领取。所以 `leaseMs` 必须
- * 与执行器的真实时长成比例（执行器还应该调 `heartbeatJob` 续租）。
+ * 与执行器的真实时长成比例。运行器会在执行器运行期间**自动续租**（间隔
+ * `lease.heartbeatIntervalMs` = `leaseMs/3`，下限 1 秒）；执行器也可以自己再调
+ * `heartbeatJob`，但这不是必须的。
+ *
+ * 租约栅栏（fencing）：收尾时 `completeJob`/`failJob` 都会带上 `leaseOwner` + `attempt`；
+ * 租约已易主的迟到回报会被 `RESOURCE_LOCKED` 拦下，本次结果作废（`stale`）。
+ * 没有这层栅栏，租约过期被重领后原执行者仍能改写终态，同一条任务会被跑两遍。
  */
 
 import { ContractError } from '@yfe/contracts'
 import type { Job, JobId, JobLease, JobStatus, RequestId, UtcTimestamp } from '@yfe/contracts'
 
-import { DEFAULT_JOB_LEASE_MS, claimJob, completeJob, defaultJobIdSource, failJob } from '../db/jobs.js'
+import { DEFAULT_JOB_LEASE_MS, claimJob, completeJob, defaultJobIdSource, failJob, heartbeatJob } from '../db/jobs.js'
 import type { JobIdSource, JobRepoDeps } from '../db/jobs.js'
 import type { ServerDb } from '../db/open.js'
 
@@ -96,6 +102,57 @@ function describeError(error: unknown): string {
   return String(error)
 }
 
+/**
+ * 收尾时允许"认输"的契约错误码：这些表示**任务已经不属于我们**（或已经终态），
+ * 不是异常而是并发结局，调用方应把它当 stale 处理。
+ *
+ * - `STATE_INVALID_TRANSITION`：任务已被并发取消/完成。
+ * - `NOT_FOUND_JOB`：行没了。
+ * - `RESOURCE_LOCKED`：租约已易主/已过期/`attempt` 不匹配（fencing 拦下的迟到回报）。
+ */
+const STALE_ERROR_CODES: readonly string[] = ['STATE_INVALID_TRANSITION', 'NOT_FOUND_JOB', 'RESOURCE_LOCKED']
+
+function isStaleError(error: unknown): error is ContractError {
+  return error instanceof ContractError && STALE_ERROR_CODES.includes(error.code)
+}
+
+/**
+ * 执行器运行期间的自动续租。
+ *
+ * 为什么由运行器负责：默认租约 30 秒，而真实 AI 任务动辄几分钟。执行器一旦忘了调
+ * `heartbeatJob`，租约过期就会被另一个 worker 重领 —— 同一条任务被跑两遍（副作用重复）。
+ * 续租失败（租约已易主/已过期/任务已终态）只记日志并停表：**真正的裁决在收尾**，
+ * 由 `completeJob`/`failJob` 的 fencing 抛 `RESOURCE_LOCKED` 把迟到结果作废。
+ */
+function startLeaseHeartbeat(
+  db: ServerDb,
+  owner: string,
+  leaseMs: number,
+  lease: JobLease,
+  repoDeps: JobRepoDeps,
+  log?: (line: Record<string, unknown>) => void,
+): { stop(): void } {
+  // 下限 250ms：既避免极短租约下的空转，又让单测能在毫秒级验证续租确实发生。
+  const intervalMs = Math.max(250, Math.floor(lease.heartbeatIntervalMs))
+  let timer: ReturnType<typeof setInterval> | null = null
+  const stop = (): void => {
+    if (timer === null) return
+    clearInterval(timer)
+    timer = null
+  }
+  timer = setInterval(() => {
+    try {
+      heartbeatJob(db, { jobId: lease.jobId, owner, leaseMs }, repoDeps)
+    } catch (error) {
+      log?.({ event: 'job.lease_lost', jobId: lease.jobId, code: errorCodeOf(error) })
+      stop()
+    }
+  }, intervalMs)
+  // 定时器不阻止进程退出（`start()` 之外的调用方可能只想跑一轮）。
+  if (typeof timer.unref === 'function') timer.unref()
+  return { stop }
+}
+
 export function createJobRunner(options: JobRunnerOptions): JobRunner {
   const leaseMs = options.leaseMs ?? DEFAULT_JOB_LEASE_MS
   const pollIntervalMs = options.pollIntervalMs ?? 1_000
@@ -105,17 +162,20 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
   let stopped = false
   let loop: Promise<void> | null = null
 
-  function persistFailure(jobId: JobId, error: unknown): boolean {
+  function persistFailure(jobId: JobId, error: unknown, attempt: number): boolean {
     try {
-      failJob(options.db, { jobId, errorCode: errorCodeOf(error), errorMessage: describeError(error) }, repoDeps)
+      // fencing：这次失败回报必须带租约身份，否则会把已被别人接手的任务判死。
+      failJob(
+        options.db,
+        { jobId, errorCode: errorCodeOf(error), errorMessage: describeError(error), leaseOwner: owner, attempt },
+        repoDeps,
+      )
       return true
     } catch (persistError) {
-      // 落不了 `failed` 只有两种可能：任务已经终态（被并发取消/完成），或行没了。
+      // 落不了 `failed` 只可能是：任务已经终态（被并发取消/完成）、行没了，或租约已易主。
       // 这不是"吞异常"：原始错误仍在 `RunnerOutcome.failed.error` 里返回给调用方；
       // 其余失败（磁盘/约束/未知）一律向上抛，绝不静默。
-      if (persistError instanceof ContractError && (persistError.code === 'STATE_INVALID_TRANSITION' || persistError.code === 'NOT_FOUND_JOB')) {
-        return false
-      }
+      if (isStaleError(persistError)) return false
       throw persistError
     }
   }
@@ -126,37 +186,42 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
     const claim = claimJob(options.db, { owner, leaseMs }, repoDeps)
     if (claim === null) return { kind: 'idle' }
     const { job, lease, attempt } = claim
+    const heartbeat = startLeaseHeartbeat(options.db, owner, leaseMs, lease, repoDeps, options.log)
 
     try {
-      await options.executor(job, { lease, attempt })
-    } catch (error) {
-      const failurePersisted = persistFailure(job.id, error)
-      options.log?.({ event: 'job.executor_failed', jobId: job.id, attempt, code: errorCodeOf(error), persisted: failurePersisted })
-      return { kind: 'failed', jobId: job.id, attempt, lease, error, failurePersisted }
-    }
-
-    let completed: Job
-    try {
-      completed = completeJob(options.db, { jobId: job.id }, repoDeps)
-    } catch (error) {
-      if (error instanceof ContractError && (error.code === 'STATE_INVALID_TRANSITION' || error.code === 'NOT_FOUND_JOB')) {
-        // 执行期间任务被取消/回收：结果无效，丢弃。不把它当失败（任务并没有失败）。
-        options.log?.({ event: 'job.stale', jobId: job.id, attempt, code: error.code })
-        return { kind: 'stale', jobId: job.id, attempt, lease, reason: error.code }
+      try {
+        await options.executor(job, { lease, attempt })
+      } catch (error) {
+        const failurePersisted = persistFailure(job.id, error, attempt)
+        options.log?.({ event: 'job.executor_failed', jobId: job.id, attempt, code: errorCodeOf(error), persisted: failurePersisted })
+        return { kind: 'failed', jobId: job.id, attempt, lease, error, failurePersisted }
       }
-      throw error
-    }
 
-    if (completed.status === 'cancelled') {
-      // 执行期间收到了取消：`completeJob` 对 `cancelling` 的落点是 `cancelled`
-      // （"取消是请求不是事实"——请求到达后由持有租约的一方推进终态）。
-      // 这次结果被丢弃，**不算成功**：报成功会让调用方以为产物已经可用。
-      options.log?.({ event: 'job.stale', jobId: job.id, attempt, code: 'JOB_CANCELLED' })
-      return { kind: 'stale', jobId: job.id, attempt, lease, reason: 'JOB_CANCELLED' }
-    }
+      let completed: Job
+      try {
+        completed = completeJob(options.db, { jobId: job.id, leaseOwner: owner, attempt }, repoDeps)
+      } catch (error) {
+        if (isStaleError(error)) {
+          // 执行期间任务被取消/回收/租约易主：结果无效，丢弃。不把它当失败（任务并没有失败）。
+          options.log?.({ event: 'job.stale', jobId: job.id, attempt, code: error.code })
+          return { kind: 'stale', jobId: job.id, attempt, lease, reason: error.code }
+        }
+        throw error
+      }
 
-    options.log?.({ event: 'job.succeeded', jobId: job.id, attempt })
-    return { kind: 'succeeded', jobId: job.id, attempt, lease }
+      if (completed.status === 'cancelled') {
+        // 执行期间收到了取消：`completeJob` 对 `cancelling` 的落点是 `cancelled`
+        // （"取消是请求不是事实"——请求到达后由持有租约的一方推进终态）。
+        // 这次结果被丢弃，**不算成功**：报成功会让调用方以为产物已经可用。
+        options.log?.({ event: 'job.stale', jobId: job.id, attempt, code: 'JOB_CANCELLED' })
+        return { kind: 'stale', jobId: job.id, attempt, lease, reason: 'JOB_CANCELLED' }
+      }
+
+      options.log?.({ event: 'job.succeeded', jobId: job.id, attempt })
+      return { kind: 'succeeded', jobId: job.id, attempt, lease }
+    } finally {
+      heartbeat.stop()
+    }
   }
 
   async function sleepSlices(totalMs: number): Promise<void> {
@@ -182,7 +247,17 @@ export function createJobRunner(options: JobRunnerOptions): JobRunner {
       stopped = false
       loop = (async (): Promise<void> => {
         while (!stopped) {
-          const outcome = await runOnce()
+          let outcome: RunnerOutcome
+          try {
+            outcome = await runOnce()
+          } catch (error) {
+            // 未知持久化错误：**绝不让循环 promise 拒绝**。调用方通常不 await `start()`，
+            // 拒绝会变成 unhandled rejection，而且循环会静默停摆（任务永不推进）。
+            // 记日志 → 退避 → 继续。
+            options.log?.({ event: 'job.loop_error', code: errorCodeOf(error), message: describeError(error) })
+            await sleepSlices(pollIntervalMs)
+            continue
+          }
           if (outcome.kind === 'stopped') break
           if (outcome.kind !== 'succeeded') await sleepSlices(pollIntervalMs)
         }
