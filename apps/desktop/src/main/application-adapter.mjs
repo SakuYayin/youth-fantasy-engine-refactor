@@ -55,8 +55,13 @@ import { saveDraft as saveDraftTransaction } from '@yfe/persistence-sqlite';
 import {
   createDocument as insertDocument,
   createProject as insertProject,
+  createSettingsEntity as insertSettingsEntity,
   getDocument as readDocument,
+  getSettingsEntity as readSettingsEntity,
   listDocumentTree as readDocumentTree,
+  listSettingsEntities as readSettingsEntities,
+  listSettingsEntitiesInWorkspace as readSettingsEntitiesInWorkspace,
+  updateSettingsEntity,
 } from '@yfe/persistence-sqlite/repositories';
 
 // ---------------------------------------------------------------------------
@@ -299,6 +304,128 @@ export function createSqliteApplicationPorts({ db, ids, revisions, describeDatab
           return ok(listed.value.documents);
         } catch (thrown) {
           return errorResult(thrown, requestId, '读取文档树失败');
+        }
+      },
+    },
+
+    // -- 设定实体 ----------------------------------------------------------
+    settingsEntities: {
+      /**
+       * 列设定实体。
+       *
+       * 形状翻译：repository 回 `Result<readonly SettingsEntity[]>`，端口也承诺数组
+       * （用例层再包成 `{ entities }`），所以直接透传。
+       *
+       * `projectId === null` 表示「跨作品列出该工作区全部设定实体」：存储层没有
+       * 「projectId 可选」的读函数，走 {@link readSettingsEntitiesInWorkspace}。
+       * 反过来，**给了非法 projectId 绝不在本层降级**成全工作区查询——那是把
+       * 「读错范围」伪装成「读到了」，用例层已先行拦下。
+       */
+      async listSettingsEntities(request) {
+        const requestId = request?.context?.requestId;
+        try {
+          if (request.projectId === null) {
+            return readSettingsEntitiesInWorkspace(db, {
+              context: request.context,
+              schemaTemplateId: request.schemaTemplateId ?? undefined,
+              includeDeleted: request.includeDeleted,
+            });
+          }
+          return readSettingsEntities(db, {
+            context: request.context,
+            projectId: request.projectId,
+            schemaTemplateId: request.schemaTemplateId ?? undefined,
+            includeDeleted: request.includeDeleted,
+          });
+        } catch (thrown) {
+          return errorResult(thrown, requestId, '列出设定实体失败');
+        }
+      },
+
+      /**
+       * 读单个设定实体。
+       *
+       * 形状：端口承诺 `Result<SettingsEntity>`（**裸实体**），`{ entity }` 由用例层
+       * 组成 IPC 的 `SettingsEntityGetOutput`。这里多包一层会让用例的形状门禁
+       * 把 payload 判成非法（`id`/`projectId` 都在 `entity` 里面）——别包。
+       * repository 已按 workspaceId 过滤（跨工作区 → PERMISSION_WORKSPACE_MISMATCH）。
+       */
+      async getSettingsEntity(request) {
+        const requestId = request?.context?.requestId;
+        try {
+          return readSettingsEntity(db, request.context, request.entityId);
+        } catch (thrown) {
+          return errorResult(thrown, requestId, '读取设定实体失败');
+        }
+      },
+
+      /**
+       * 新建或更新设定实体。
+       *
+       * `orderKey === null` 的含义按新建/更新而不同，映射到存储层两个不同能力：
+       * - 新建：`null` → `placement: { mode: 'end' }`（追加到末尾）；
+       *      非 null → `placement: { mode: 'explicit', orderKey }`。
+       * - 更新：`null` → patch **不带** orderKey（保持原位置，不重排）；
+       *      非 null → patch 带 `orderKey` 重排。
+       *
+       * 更新路径的 orderKey 用回读拿权威值：调用方没给重排时不重排，此时当前值
+       * 只在库里，端口却承诺回 `orderKey`，所以读一次比猜一个更诚实。
+       */
+      async saveSettingsEntity(request) {
+        const requestId = request?.context?.requestId;
+        try {
+          const repositoryDeps = {
+            clock: clockAt(request.occurredAt),
+            rng: cryptoRandomSource,
+            revisionGenerator: revisions,
+          };
+          if (request.isCreate) {
+            const written = insertSettingsEntity(
+              db,
+              {
+                context: request.context,
+                projectId: request.projectId,
+                schemaTemplateId: request.schemaTemplateId,
+                name: request.name,
+                values: request.values,
+                placement:
+                  request.orderKey === null
+                    ? { mode: 'end' }
+                    : { mode: 'explicit', orderKey: request.orderKey },
+                // 用例层已生成 ID（幂等重放必须落同一个 ID），repository 原样采用
+                entityId: request.entityId,
+              },
+              repositoryDeps,
+            );
+            if (!written.ok) return written;
+            return ok({
+              entityId: written.value.entityId,
+              revision: written.value.revision,
+              orderKey: written.value.orderKey,
+            });
+          }
+          const written = updateSettingsEntity(
+            db,
+            request.context,
+            request.entityId,
+            {
+              name: request.name,
+              // values 是整体替换：契约必填，端口不透传「只改一部分」的语义
+              values: request.values,
+              ...(request.orderKey === null ? {} : { orderKey: request.orderKey }),
+            },
+            repositoryDeps,
+          );
+          if (!written.ok) return written;
+          const read = readSettingsEntity(db, request.context, request.entityId);
+          if (!read.ok) return read;
+          return ok({
+            entityId: read.value.id,
+            revision: written.value.revision,
+            orderKey: read.value.orderKey,
+          });
+        } catch (thrown) {
+          return errorResult(thrown, requestId, '保存设定实体失败');
         }
       },
     },

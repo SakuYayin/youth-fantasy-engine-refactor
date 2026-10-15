@@ -18,6 +18,13 @@ import type {
   Revision,
   SaveDraftInput,
   SaveDraftOutput,
+  SettingsEntity,
+  SettingsEntityGetInput,
+  SettingsEntityGetOutput,
+  SettingsEntityListInput,
+  SettingsEntityListOutput,
+  SettingsEntitySaveInput,
+  SettingsEntitySaveOutput,
   SystemStatusOutput,
   UtcTimestamp,
 } from '@yfe/contracts'
@@ -110,6 +117,30 @@ function savedOutput(input: SaveDraftInput, sequence: number): Result<SaveDraftO
   }
 }
 
+function settingsEntity(input: {
+  id: string
+  name: string
+  schemaTemplateId?: string
+  orderKey?: string
+  revision?: string
+  deleted?: number
+  values?: Readonly<Record<string, unknown>>
+}): SettingsEntity {
+  return {
+    id: input.id as SettingsEntity['id'],
+    workspaceId: 'ws-local' as SettingsEntity['workspaceId'],
+    projectId: 'prj_1' as ProjectId,
+    schemaTemplateId: input.schemaTemplateId ?? 'tpl_character',
+    name: input.name,
+    values: input.values ?? { 阵营: '青云门' },
+    orderKey: input.orderKey ?? 'A1',
+    revision: rev(input.revision ?? 'rev_1'),
+    deleted: input.deleted ?? 0,
+    createdAt: ts(AT),
+    updatedAt: ts(AT),
+  }
+}
+
 interface Overrides {
   status?: () => Result<SystemStatusOutput>
   tree?: () => Result<DocumentTreeOutput>
@@ -117,6 +148,11 @@ interface Overrides {
   createProject?: (input: ProjectCreateInput) => Result<ProjectCreateOutput> | Promise<Result<ProjectCreateOutput>>
   createDocument?: (input: DocumentCreateInput) => Result<DocumentCreateOutput>
   save?: (input: SaveDraftInput) => Result<SaveDraftOutput> | Promise<Result<SaveDraftOutput>>
+  listSettings?: (input: SettingsEntityListInput) => Result<SettingsEntityListOutput>
+  getSettings?: (input: SettingsEntityGetInput) => Result<SettingsEntityGetOutput>
+  saveSettings?: (
+    input: SettingsEntitySaveInput,
+  ) => Result<SettingsEntitySaveOutput> | Promise<Result<SettingsEntitySaveOutput>>
 }
 
 interface Harness {
@@ -127,6 +163,9 @@ interface Harness {
   readonly documentInputs: readonly DocumentCreateInput[]
   readonly overrides: Overrides
   readonly documents: readonly DocumentSummary[]
+  readonly settings: readonly SettingsEntity[]
+  readonly settingsListInputs: readonly SettingsEntityListInput[]
+  readonly settingsSaveInputs: readonly SettingsEntitySaveInput[]
 }
 
 function makeHarness(initial: Overrides = {}, storedProject: string | null = 'prj_1'): Harness {
@@ -138,6 +177,12 @@ function makeHarness(initial: Overrides = {}, storedProject: string | null = 'pr
   const saves: SaveDraftInput[] = []
   const projectInputs: ProjectCreateInput[] = []
   const documentInputs: DocumentCreateInput[] = []
+  const settings: SettingsEntity[] = [
+    settingsEntity({ id: 'wld_1', name: '青云门', schemaTemplateId: 'tpl_faction', orderKey: 'A1' }),
+    settingsEntity({ id: 'wld_2', name: '魔教', schemaTemplateId: 'tpl_faction', orderKey: 'A2' }),
+  ]
+  const settingsListInputs: SettingsEntityListInput[] = []
+  const settingsSaveInputs: SettingsEntitySaveInput[] = []
 
   const client: RendererClientPort = {
     systemStatus: async () => overrides.status?.() ?? { ok: true, value: systemStatus() },
@@ -177,6 +222,46 @@ function makeHarness(initial: Overrides = {}, storedProject: string | null = 'pr
       if (overrides.save !== undefined) return overrides.save(input)
       return savedOutput(input, saves.length)
     },
+    listSettingsEntities: async (input) => {
+      settingsListInputs.push(input)
+      if (overrides.listSettings !== undefined) return overrides.listSettings(input)
+      // 假服务按被请求的作品过滤：状态机有没有真的把作用域传下来，靠它才测得出来。
+      const scoped =
+        input.projectId === undefined
+          ? settings
+          : settings.filter((entity) => String(entity.projectId) === String(input.projectId))
+      return { ok: true, value: { entities: scoped } }
+    },
+    getSettingsEntity: async (input) => {
+      if (overrides.getSettings !== undefined) return overrides.getSettings(input)
+      const found = settings.find((entity) => String(entity.id) === String(input.entityId))
+      if (found === undefined) return failure('NOT_FOUND') as never
+      return { ok: true, value: { entity: found } }
+    },
+    saveSettingsEntity: async (input) => {
+      settingsSaveInputs.push(input)
+      if (overrides.saveSettings !== undefined) return overrides.saveSettings(input)
+      const written = settingsEntity({
+        // 新建时用例层才生成 ID（在服务端），所以客户端传下来的是 null。
+        id: input.entityId ?? 'wld_new',
+        name: input.name,
+        schemaTemplateId: input.schemaTemplateId,
+        orderKey: input.orderKey ?? undefined,
+        values: input.values,
+        revision: `rev_s${settingsSaveInputs.length}`,
+      })
+      const index = settings.findIndex((entity) => String(entity.id) === String(written.id))
+      if (index >= 0) settings[index] = written
+      else settings.push(written)
+      return {
+        ok: true,
+        value: {
+          entityId: written.id,
+          revision: written.revision,
+          orderKey: written.orderKey,
+        },
+      }
+    },
   }
 
   const store = {
@@ -197,7 +282,18 @@ function makeHarness(initial: Overrides = {}, storedProject: string | null = 'pr
     maxWaitMs: 50,
   })
 
-  return { state, store, saves, projectInputs, documentInputs, overrides, documents }
+  return {
+    state,
+    store,
+    saves,
+    projectInputs,
+    documentInputs,
+    overrides,
+    documents,
+    settings,
+    settingsListInputs,
+    settingsSaveInputs,
+  }
 }
 
 afterEach(() => {
@@ -485,5 +581,187 @@ describe('app-state：新建作品与章节', () => {
     await empty.state.start()
     expect(await empty.state.createChapter('第 1 章')).toBe(false)
     expect(empty.state.getSnapshot().lastError?.code).toBe('VALIDATION_MISSING_FIELD')
+  })
+})
+
+describe('app-state：设定实体通道', () => {
+  it('列表限定在当前作品；allProjects 才跨作品；没有作品时不带 projectId', async () => {
+    const harness = makeHarness()
+    await harness.state.start()
+    expect(await harness.state.loadSettingsEntities()).toBe(true)
+    expect(harness.settingsListInputs[0]?.projectId).toBe('prj_1')
+    expect(harness.settingsListInputs[0]?.context.workspaceId).toBe('ws_local')
+
+    await harness.state.loadSettingsEntities({ allProjects: true, includeDeleted: true })
+    expect(harness.settingsListInputs[1]?.projectId).toBeUndefined()
+    expect(harness.settingsListInputs[1]?.includeDeleted).toBe(true)
+
+    const empty = makeHarness({}, null)
+    await empty.state.start()
+    await empty.state.loadSettingsEntities()
+    expect(empty.settingsListInputs[0]?.projectId).toBeUndefined()
+
+    const template = makeHarness()
+    await template.state.start()
+    await template.state.loadSettingsEntities({ schemaTemplateId: 'tpl_faction' })
+    expect(template.settingsListInputs[0]?.schemaTemplateId).toBe('tpl_faction')
+    harness.state.dispose()
+    empty.state.dispose()
+    template.state.dispose()
+  })
+
+  it('载入后快照直接给出视图；values 原样透传且 ID 不当品牌类型用', async () => {
+    const harness = makeHarness()
+    await harness.state.start()
+    await harness.state.loadSettingsEntities()
+    const snapshot = harness.state.getSnapshot()
+    expect(snapshot.settingsEntities.map((entity) => entity.id)).toEqual(['wld_1', 'wld_2'])
+    expect(snapshot.settingsEntities[0]?.name).toBe('青云门')
+    expect(snapshot.settingsEntities[0]?.values).toEqual({ 阵营: '青云门' })
+    expect(snapshot.settingsLoading).toBe(false)
+    expect(snapshot.selectedSettingsEntity).toBeNull()
+    harness.state.dispose()
+  })
+
+  it('选中命中本地不发起 get；未命中才读一次；读到后合并并按 order_key 重排', async () => {
+    const harness = makeHarness()
+    let gets = 0
+    harness.overrides.getSettings = (input) => {
+      gets += 1
+      void input
+      return {
+        ok: true,
+        value: {
+          entity: settingsEntity({
+            id: 'wld_9',
+            name: '散修联盟',
+            schemaTemplateId: 'tpl_faction',
+            orderKey: 'A15',
+          }),
+        },
+      }
+    }
+    const { state } = harness
+    await state.start()
+    await state.loadSettingsEntities()
+    expect(await state.selectSettingsEntity('wld_1')).toBe(true)
+    expect(gets).toBe(0)
+    expect(state.getSnapshot().selectedSettingsEntityId).toBe('wld_1')
+
+    expect(await state.selectSettingsEntity('wld_9')).toBe(true)
+    expect(gets).toBe(1)
+    const snapshot = state.getSnapshot()
+    expect(snapshot.selectedSettingsEntity?.name).toBe('散修联盟')
+    // 合并进列表时按 order_key 重排，而不是一律追加到末尾。
+    //
+    // 🔴 比较是**逐字符**的（与存储层 `ORDER BY order_key, id` 同语义，SQLite 默认
+    //    BINARY 排序），所以 'A15' 落在 'A1' 与 'A2' 之间：'1' < '2'。
+    //    这正是 order_key 必须由 `orderKeyBetween` 生成、不能手写成 'A15' 的原因——
+    //    手写的键在真实排序里不会得到「第 15 位」的直觉位置。
+    expect(snapshot.settingsEntities.map((entity) => entity.id)).toEqual(['wld_1', 'wld_9', 'wld_2'])
+    state.dispose()
+  })
+
+  it('新建提交：entityId 与 expectedRevision 都是 null，结果合并进列表并选中', async () => {
+    const harness = makeHarness()
+    const { state } = harness
+    await state.start()
+    const result = await state.submitSettingsEntity({
+      schemaTemplateId: 'tpl_faction',
+      name: '太虚剑宗',
+      values: { 阵营: '正道', 掌门: '李长生' },
+      idempotencyKey: 'form_1',
+    })
+    expect(result).toEqual({ ok: true, entityId: 'wld_new', revision: 'rev_s1', orderKey: 'A1' })
+    const sent = harness.settingsSaveInputs[0]
+    expect(sent?.entityId).toBeNull()
+    expect(sent?.context.expectedRevision).toBeNull()
+    expect(sent?.context.projectId).toBe('prj_1')
+    expect(sent?.context.idempotencyKey).toBe('form_1')
+    expect(sent?.orderKey).toBeNull()
+    const snapshot = state.getSnapshot()
+    expect(snapshot.selectedSettingsEntityId).toBe('wld_new')
+    expect(snapshot.selectedSettingsEntity?.values).toEqual({ 阵营: '正道', 掌门: '李长生' })
+    state.dispose()
+  })
+
+  it('更新提交：省略 expectedRevision 时自动用已加载的 revision，显式 null 则不比旧版本', async () => {
+    const harness = makeHarness()
+    const { state } = harness
+    await state.start()
+    await state.loadSettingsEntities()
+
+    expect(
+      await state.submitSettingsEntity({
+        entityId: 'wld_1',
+        schemaTemplateId: 'tpl_faction',
+        name: '青云门（改名）',
+        values: { 阵营: '正道' },
+      }),
+    ).toEqual({ ok: true, entityId: 'wld_1', revision: 'rev_s1', orderKey: 'A1' })
+    expect(harness.settingsSaveInputs[0]?.context.expectedRevision).toBe('rev_1')
+
+    // 显式 null = 「不管旧版本」：
+    await state.submitSettingsEntity({
+      entityId: 'wld_2',
+      schemaTemplateId: 'tpl_faction',
+      name: '魔教（强制覆盖）',
+      values: { 阵营: '邪道' },
+      expectedRevision: null,
+    })
+    expect(harness.settingsSaveInputs[1]?.context.expectedRevision).toBeNull()
+    state.dispose()
+  })
+
+  it('没有作品时提交不发 IPC；冲突失败把脱敏错误码交给界面并记进 lastError', async () => {
+    const empty = makeHarness({}, null)
+    await empty.state.start()
+    expect(
+      await empty.state.submitSettingsEntity({
+        schemaTemplateId: 'tpl_faction',
+        name: '无作品的设定',
+        values: {},
+      }),
+    ).toEqual({
+      ok: false,
+      code: 'VALIDATION_MISSING_FIELD',
+      message: '还没有作品，先新建作品再保存设定。',
+    })
+    expect(empty.settingsSaveInputs).toHaveLength(0)
+    expect(empty.state.getSnapshot().lastError?.code).toBe('VALIDATION_MISSING_FIELD')
+
+    const harness = makeHarness()
+    harness.overrides.saveSettings = () => failure('REVISION_CONFLICT') as never
+    await harness.state.start()
+    const conflicted = await harness.state.submitSettingsEntity({
+      schemaTemplateId: 'tpl_faction',
+      name: '被别人改过的设定',
+      values: {},
+    })
+    expect(conflicted.ok).toBe(false)
+    expect(conflicted.ok === false && conflicted.code).toBe('REVISION_CONFLICT')
+    expect(harness.state.getSnapshot().lastError?.code).toBe('REVISION_CONFLICT')
+    expect(harness.state.getSnapshot().settingsEntities).toEqual([])
+    empty.state.dispose()
+    harness.state.dispose()
+  })
+
+  it('读失败不清空已载入的列表；换作品后设定实体全部清空', async () => {
+    const harness = makeHarness()
+    const { state } = harness
+    await state.start()
+    await state.loadSettingsEntities()
+    expect(state.getSnapshot().settingsEntities).toHaveLength(2)
+
+    harness.overrides.listSettings = () => failure('STORAGE_CORRUPT') as never
+    expect(await state.loadSettingsEntities()).toBe(false)
+    expect(state.getSnapshot().lastError?.code).toBe('STORAGE_CORRUPT')
+    expect(state.getSnapshot().settingsEntities).toHaveLength(2)
+
+    harness.overrides.listSettings = undefined
+    expect(await state.createProject('第二部')).toBe(true)
+    expect(state.getSnapshot().settingsEntities).toEqual([])
+    expect(state.getSnapshot().selectedSettingsEntityId).toBeNull()
+    state.dispose()
   })
 })

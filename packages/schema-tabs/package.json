@@ -1,0 +1,21 @@
+{
+  "name": "@yfe/schema-tabs",
+  "version": "4.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "description": "旧版页签元数据移植：52 个页签定义、侧栏分组、题材包与可见性规则。纯数据与纯函数，零宿主依赖",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@yfe/contracts": "*",
+    "@yfe/domain": "*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  }
+}

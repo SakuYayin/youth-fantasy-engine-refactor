@@ -11,9 +11,12 @@
  *
  * ## 已知契约缺口（R-48，见台账）
  *
- * `IPC_METHODS` 只有六个方法，**没有"列出作品"**。所以"当前作品"由渲染层自己记住
+ * `IPC_METHODS` 里**没有"列出作品"**。所以"当前作品"由渲染层自己记住
  * （`projectStore`），首次启动没有任何作品时进入空态由用户新建。
  * 这是可用的临时方案，不是终态：真正的多作品列表需要新增契约命令 + IPC 方法。
+ *
+ * 设定实体（`settingsEntities`）这条通道不借道章节的串行队列：页签的数据读写
+ * 与正文草稿互不阻塞（切页签、刷新列表都不该打断正在输入的正文）。
  */
 
 import { countChars } from '@yfe/domain'
@@ -36,6 +39,13 @@ import type {
   Revision,
   SaveDraftInput,
   SaveDraftOutput,
+  SettingsEntity,
+  SettingsEntityGetInput,
+  SettingsEntityGetOutput,
+  SettingsEntityListInput,
+  SettingsEntityListOutput,
+  SettingsEntitySaveInput,
+  SettingsEntitySaveOutput,
   SystemStatusOutput,
   WorkspaceId,
 } from '@yfe/contracts'
@@ -74,6 +84,63 @@ export interface AppErrorSummary {
   readonly message: string
 }
 
+/**
+ * 界面里的设定实体。
+ *
+ * 与契约 `SettingsEntity` 一一对应，唯一差别是把品牌类型（`ProjectId` / `Revision`）
+ * 收敛成 `string`：渲染层不该为了把一个 ID 塞进 `v-for` 的 key 去做类型断言。
+ * `values` 原样透传——字段由 `schemaTemplateId` 指的模板决定，渲染层不解释它。
+ */
+export interface SettingsEntityView {
+  readonly id: string
+  readonly projectId: string
+  readonly schemaTemplateId: string
+  readonly name: string
+  readonly values: Readonly<Record<string, unknown>>
+  readonly orderKey: string
+  readonly revision: string
+  readonly deleted: boolean
+}
+
+/** `loadSettingsEntities` 的过滤条件。 */
+export interface SettingsEntityQuery {
+  readonly schemaTemplateId?: string
+  readonly includeDeleted?: boolean
+  /**
+   * `true` = 跨作品列出**整个工作区**的设定实体（全局检索 / 回收站视图用）。
+   *
+   * 默认 `false`：只看当前作品。没有当前作品时这一项无意义——存储层会直接按
+   * 工作区列（`projectId` 缺省 = 跨作品），因为没有作品可限定。
+   */
+  readonly allProjects?: boolean
+}
+
+/**
+ * 通用表单/卡片页签提交的载荷。
+ *
+ * - `entityId` 省略/`null` = 新建；
+ * - `expectedRevision` 省略 = 更新时自动用**状态机已加载到的那份 revision**
+ *   （表单刚读出来的那个），拿不到才退化成「不比对旧版本」；
+ *   显式给 `null` 才表示「不管旧版本，直接覆盖」；
+ * - `idempotencyKey` 省略 = 不启用幂等回执。新建表单应当为**一次表单会话**给一个稳定键，
+ *   否则用户双击「保存」会建出两条设定（幂等键按请求去重，不按键值去重）。
+ * - `orderKey` 省略/`null` = 新建时追加到末尾，更新时保持原位置。
+ */
+export interface SettingsEntitySubmit {
+  readonly entityId?: string | null
+  readonly schemaTemplateId: string
+  readonly name: string
+  readonly values: Readonly<Record<string, unknown>>
+  readonly expectedRevision?: string | null
+  readonly orderKey?: string | null
+  readonly idempotencyKey?: string
+}
+
+/** 提交结果：失败也**不抛**，把脱敏后的错误码交给界面自己决定怎么提示。 */
+export type SettingsEntitySubmitResult =
+  | { readonly ok: true; readonly entityId: string; readonly revision: string; readonly orderKey: string }
+  | { readonly ok: false; readonly code: string; readonly message: string }
+
 export interface AppSnapshot {
   readonly ready: boolean
   readonly loading: boolean
@@ -95,9 +162,15 @@ export interface AppSnapshot {
   readonly conflict: DraftConflict | null
   readonly lastError: AppErrorSummary | null
   readonly expandedIds: readonly string[]
+  /** 当前作品的设定实体（`loadSettingsEntities` 之前为空数组）。 */
+  readonly settingsEntities: readonly SettingsEntityView[]
+  /** 设定实体的读/写是否在途（与章节的 `loading` 分开：两者互不阻塞）。 */
+  readonly settingsLoading: boolean
+  readonly selectedSettingsEntityId: string | null
+  readonly selectedSettingsEntity: SettingsEntityView | null
 }
 
-/** 渲染层用到的六个 IPC 方法（与 `apps/desktop/src/shared/ipc/channels.ts` 逐字一致）。 */
+/** 渲染层用到的 IPC 方法（与 `apps/desktop/src/shared/ipc/channels.ts` 逐字一致）。 */
 export interface RendererClientPort {
   readonly systemStatus: () => Promise<Result<SystemStatusOutput>>
   readonly listDocumentTree: (input: DocumentTreeInput) => Promise<Result<DocumentTreeOutput>>
@@ -105,6 +178,15 @@ export interface RendererClientPort {
   readonly createProject: (input: ProjectCreateInput) => Promise<Result<ProjectCreateOutput>>
   readonly createDocument: (input: DocumentCreateInput) => Promise<Result<DocumentCreateOutput>>
   readonly saveDraft: (input: SaveDraftInput) => Promise<Result<SaveDraftOutput>>
+  readonly listSettingsEntities: (
+    input: SettingsEntityListInput,
+  ) => Promise<Result<SettingsEntityListOutput>>
+  readonly getSettingsEntity: (
+    input: SettingsEntityGetInput,
+  ) => Promise<Result<SettingsEntityGetOutput>>
+  readonly saveSettingsEntity: (
+    input: SettingsEntitySaveInput,
+  ) => Promise<Result<SettingsEntitySaveOutput>>
 }
 
 /** 当前作品的记忆位置（渲染层本地存储；Electron 下是 file:// 源的 localStorage）。 */
@@ -147,6 +229,19 @@ export interface AppState {
   toggleExpanded(documentId: string): void
   setNavigationGuard(guard: (() => boolean) | null): void
   dispose(): void
+  /**
+   * 列出设定实体（通用表单/表格/卡片页签的数据源）。
+   *
+   * 与章节导航**互不阻塞**：设定页签的载入不冲刷草稿、也不走章节的串行队列
+   * （切页签不该打断正在输入的正文）。返回 false 表示失败，`lastError` 里有脱敏原因。
+   */
+  loadSettingsEntities(options?: SettingsEntityQuery): Promise<boolean>
+  /** 选中一条设定实体；状态机里没有就去读一次。 */
+  selectSettingsEntity(entityId: string): Promise<boolean>
+  /** 重新读一条设定实体并合并进列表（外部改动后刷新用）。 */
+  refreshSettingsEntity(entityId: string): Promise<boolean>
+  /** 新建或更新（`entityId` 缺省 = 新建）。 */
+  submitSettingsEntity(submit: SettingsEntitySubmit): Promise<SettingsEntitySubmitResult>
 }
 
 /**
@@ -188,6 +283,9 @@ export function createAppState(deps: AppStateDeps): AppState {
   let disposed = false
   let navigation: Promise<void> = Promise.resolve()
   let navigationGuard: (() => boolean) | null = null
+  let settingsEntities: readonly SettingsEntityView[] = []
+  let settingsLoading = false
+  let selectedSettingsEntityId: string | null = null
 
   const listeners = new Set<(snapshot: AppSnapshot) => void>()
 
@@ -269,6 +367,11 @@ export function createAppState(deps: AppStateDeps): AppState {
       conflict: sessionSnapshot?.conflict ?? null,
       lastError,
       expandedIds,
+      settingsEntities,
+      settingsLoading,
+      selectedSettingsEntityId,
+      selectedSettingsEntity:
+        settingsEntities.find((entity) => entity.id === selectedSettingsEntityId) ?? null,
     }
   }
 
@@ -411,6 +514,52 @@ export function createAppState(deps: AppStateDeps): AppState {
     return true
   }
 
+  function toSettingsEntityView(entity: SettingsEntity): SettingsEntityView {
+    return {
+      id: String(entity.id),
+      projectId: String(entity.projectId),
+      schemaTemplateId: entity.schemaTemplateId,
+      name: entity.name,
+      values: entity.values,
+      orderKey: entity.orderKey,
+      revision: String(entity.revision),
+      deleted: entity.deleted !== 0,
+    }
+  }
+
+  /** 合并一条实体并按存储层的顺序（`order_key, id`）重排，避免刷新后位置漂移。 */
+  function mergeSettingsEntity(view: SettingsEntityView): void {
+    const next = settingsEntities.filter((entity) => entity.id !== view.id)
+    next.push(view)
+    next.sort((left, right) => {
+      if (left.orderKey !== right.orderKey) return left.orderKey < right.orderKey ? -1 : 1
+      if (left.id === right.id) return 0
+      return left.id < right.id ? -1 : 1
+    })
+    settingsEntities = next
+  }
+
+  /** 读一条设定实体并合并。返回 false 时 `lastError` 里是脱敏后的原因。 */
+  async function loadSettingsEntity(entityId: string): Promise<boolean> {
+    settingsLoading = true
+    emit()
+    try {
+      const result = await deps.client.getSettingsEntity({ context: readContext(), entityId })
+      if (!result.ok) {
+        noteFailure(result.error.code, result.error.message)
+        return false
+      }
+      noteSuccess()
+      const view = toSettingsEntityView(result.value.entity)
+      mergeSettingsEntity(view)
+      selectedSettingsEntityId = view.id
+      return true
+    } finally {
+      settingsLoading = false
+      emit()
+    }
+  }
+
   function navigate(action: () => Promise<boolean>): Promise<boolean> {
     const task = navigation.then(async () => {
       if (disposed) return false
@@ -491,6 +640,9 @@ export function createAppState(deps: AppStateDeps): AppState {
       deps.projectStore.write(projectId)
       documents = []
       selectedDocumentId = null
+      // 换了作品，上一部的设定实体一条都不能留：它们属于别的 projectId。
+      settingsEntities = []
+      selectedSettingsEntityId = null
       session?.dispose()
       session = null
       title = ''
@@ -601,6 +753,126 @@ export function createAppState(deps: AppStateDeps): AppState {
     },
 
     setNavigationGuard(guard): void { navigationGuard = guard },
+
+    async loadSettingsEntities(options: SettingsEntityQuery = {}): Promise<boolean> {
+      settingsLoading = true
+      emit()
+      try {
+        // 没有当前作品时 `projectId` 缺省 = 跨作品列出整个工作区（存储层语义）；
+        // 有当前作品且没显式要跨作品，就限定到当前作品。
+        const scoped = projectId !== null && options.allProjects !== true
+        const input: SettingsEntityListInput = {
+          context: readContext(),
+          ...(scoped ? { projectId: projectId as ProjectId } : {}),
+          ...(options.schemaTemplateId === undefined
+            ? {}
+            : { schemaTemplateId: options.schemaTemplateId }),
+          ...(options.includeDeleted === undefined
+            ? {}
+            : { includeDeleted: options.includeDeleted }),
+        }
+        const result = await deps.client.listSettingsEntities(input)
+        if (!result.ok) {
+          noteFailure(result.error.code, result.error.message)
+          return false
+        }
+        noteSuccess()
+        settingsEntities = result.value.entities.map(toSettingsEntityView)
+        // 选中项可能已不在列表里（被删 / 换了过滤条件）：不能留一个指向空气的 ID。
+        if (
+          selectedSettingsEntityId !== null &&
+          !settingsEntities.some((entity) => entity.id === selectedSettingsEntityId)
+        ) {
+          selectedSettingsEntityId = null
+        }
+        return true
+      } finally {
+        settingsLoading = false
+        emit()
+      }
+    },
+
+    async selectSettingsEntity(entityIdValue: string): Promise<boolean> {
+      const known = settingsEntities.find((entity) => entity.id === entityIdValue)
+      if (known !== undefined) {
+        selectedSettingsEntityId = known.id
+        emit()
+        return true
+      }
+      return loadSettingsEntity(entityIdValue)
+    },
+
+    async refreshSettingsEntity(entityIdValue: string): Promise<boolean> {
+      return loadSettingsEntity(entityIdValue)
+    },
+
+    async submitSettingsEntity(submit: SettingsEntitySubmit): Promise<SettingsEntitySubmitResult> {
+      if (projectId === null) {
+        noteFailure('VALIDATION_MISSING_FIELD', '还没有作品，先新建作品再保存设定。')
+        emit()
+        return {
+          ok: false,
+          code: 'VALIDATION_MISSING_FIELD',
+          message: '还没有作品，先新建作品再保存设定。',
+        }
+      }
+      const entityId = submit.entityId ?? null
+      const known = entityId === null ? undefined : settingsEntities.find((e) => e.id === entityId)
+      // 省略 expectedRevision ⇒ 用刚读出来的那份（表单的自然语义）；
+      // 显式 null ⇒ 调用方明确要求「不比对旧版本」。
+      const expected =
+        submit.expectedRevision !== undefined ? submit.expectedRevision : known?.revision ?? null
+      const input: SettingsEntitySaveInput = {
+        context: {
+          requestId: deps.newRequestId() as RequestId,
+          workspaceId: workspaceId as WorkspaceId,
+          projectId: projectId as ProjectId,
+          expectedRevision: expected === null ? null : (expected as Revision),
+          ...(submit.idempotencyKey === undefined
+            ? {}
+            : { idempotencyKey: submit.idempotencyKey as IdempotencyKey }),
+        },
+        entityId,
+        projectId: projectId as ProjectId,
+        schemaTemplateId: submit.schemaTemplateId,
+        name: submit.name,
+        values: submit.values,
+        orderKey: submit.orderKey ?? null,
+      }
+      settingsLoading = true
+      emit()
+      try {
+        const result = await deps.client.saveSettingsEntity(input)
+        if (!result.ok) {
+          noteFailure(result.error.code, result.error.message)
+          return { ok: false, code: result.error.code, message: result.error.message }
+        }
+        noteSuccess()
+        // 服务端只回 { entityId, revision, orderKey }，其余字段用提交的载荷补全：
+        // 这些值刚被写进去，回读一次只是为了形状好看，不如直接用已知值。
+        const view: SettingsEntityView = {
+          id: String(result.value.entityId),
+          projectId: String(projectId),
+          schemaTemplateId: submit.schemaTemplateId,
+          name: submit.name,
+          values: submit.values,
+          orderKey: String(result.value.orderKey),
+          revision: String(result.value.revision),
+          deleted: false,
+        }
+        mergeSettingsEntity(view)
+        selectedSettingsEntityId = view.id
+        return {
+          ok: true,
+          entityId: view.id,
+          revision: view.revision,
+          orderKey: view.orderKey,
+        }
+      } finally {
+        settingsLoading = false
+        emit()
+      }
+    },
 
     dispose(): void {
       disposed = true

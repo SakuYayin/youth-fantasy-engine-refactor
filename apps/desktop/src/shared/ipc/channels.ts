@@ -4,6 +4,9 @@ import type {
   DocumentTreeInput,
   ProjectCreateInput,
   SaveDraftInput,
+  SettingsEntityGetInput,
+  SettingsEntityListInput,
+  SettingsEntitySaveInput,
   SystemStatusOutput,
 } from '@yfe/contracts';
 
@@ -20,6 +23,9 @@ export const IPC_METHODS = [
   'createProject',
   'createDocument',
   'systemStatus',
+  'listSettingsEntities',
+  'getSettingsEntity',
+  'saveSettingsEntity',
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];
@@ -32,6 +38,9 @@ export interface IpcRequestMap {
   createProject: ProjectCreateInput;
   createDocument: DocumentCreateInput;
   systemStatus: null;
+  listSettingsEntities: SettingsEntityListInput;
+  getSettingsEntity: SettingsEntityGetInput;
+  saveSettingsEntity: SettingsEntitySaveInput;
 }
 
 /** method → 响应 value 类型。systemStatus 直接返回 SystemStatusOutput，其余返回契约输出对象。 */
@@ -42,4 +51,7 @@ export interface IpcResponseMap {
   createProject: unknown;
   createDocument: unknown;
   systemStatus: SystemStatusOutput;
+  listSettingsEntities: unknown;
+  getSettingsEntity: unknown;
+  saveSettingsEntity: unknown;
 }

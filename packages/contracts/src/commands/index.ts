@@ -26,7 +26,7 @@ import type {
   UtcTimestamp,
   WorkspaceId,
 } from '../ids.js'
-import type { DocumentKind, DocumentSummary } from '../entities/index.js'
+import type { DocumentKind, DocumentSummary, SettingsEntity } from '../entities/index.js'
 
 // ---------------------------------------------------------------------------
 // 请求封装：每个命令都带的公共头
@@ -158,6 +158,69 @@ export interface DocumentUpdateInput {
 
 export interface DocumentUpdateOutput {
   readonly revision: Revision
+}
+
+// ---------------------------------------------------------------------------
+// 设定实体（settings_entities）
+// ---------------------------------------------------------------------------
+
+/**
+ * 列出设定实体。
+ *
+ * 动态字段（「姓名」「境界」这些由模板决定的列）统一放在 `values` JSON 里，
+ * 数据库不为它们建列——否则每加一个字段都要迁移表结构
+ * （见 `persistence-sqlite` 的 `stringifyValues`）。
+ *
+ * `projectId` 省略时是**工作区级**列表（跨作品），否则只列该作品下的实体。
+ * `schemaTemplateId` 只做模板过滤，不改变排序：排序始终由 `orderKey` 决定。
+ */
+export interface SettingsEntityListInput {
+  readonly context: ReadContext
+  /** 省略 = 列出该工作区下的全部设定实体。 */
+  readonly projectId?: ProjectId
+  readonly schemaTemplateId?: string
+  readonly includeDeleted?: boolean
+}
+
+export interface SettingsEntityListOutput {
+  readonly entities: readonly SettingsEntity[]
+}
+
+/** 读取单个设定实体；已软删的实体默认不可见（`includeDeleted` 走列表接口）。 */
+export interface SettingsEntityGetInput {
+  readonly context: ReadContext
+  readonly entityId: string
+}
+
+export interface SettingsEntityGetOutput {
+  readonly entity: SettingsEntity
+}
+
+/**
+ * 新建（`entityId` 省略或 `null`）或更新（给出 `entityId`）设定实体。
+ *
+ * - 新建要求 `context.expectedRevision === null`，与其它新建命令一致；
+ * - 更新走 `context.expectedRevision` 乐观锁，过期返回 `REVISION_CONFLICT`；
+ * - `values` 是**整体替换**而不是深合并：深合并会让「删掉一个字段」
+ *   变得无法表达，而模板字段是可增可减的；
+ * - `orderKey` 是可选的位置覆盖：给了就按它排序（调用方自备分数索引），
+ *   不给则由存储层按末位追加。
+ */
+export interface SettingsEntitySaveInput {
+  readonly context: WriteContext
+  /** 缺省或 `null` = 新建；给出实体 ID = 更新。 */
+  readonly entityId?: string | null
+  readonly projectId: ProjectId
+  readonly schemaTemplateId: string
+  readonly name: string
+  readonly values: Readonly<Record<string, unknown>>
+  readonly orderKey?: string | null
+}
+
+export interface SettingsEntitySaveOutput {
+  readonly entityId: string
+  readonly revision: Revision
+  readonly orderKey: string
 }
 
 // ---------------------------------------------------------------------------

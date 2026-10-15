@@ -24,6 +24,7 @@ import {
   type Result,
   type Revision,
   type SaveDraftOutput,
+  type SettingsEntity,
   type UtcTimestamp,
   type WorkspaceId,
 } from '@yfe/contracts'
@@ -38,8 +39,11 @@ import {
   type CreateProjectRequest,
   type DocumentOwnership,
   type GetDocumentRequest,
+  type GetSettingsEntityRequest,
   type IdempotencyPort,
   type ListDocumentTreeRequest,
+  type ListSettingsEntitiesRequest,
+  type SaveSettingsEntityRequest,
   type SystemStatusFacts,
 } from '../src/ports.js'
 
@@ -51,6 +55,9 @@ export interface FakeCounts {
   createDocument: number
   getDocument: number
   listDocumentTree: number
+  listSettingsEntities: number
+  getSettingsEntity: number
+  saveSettingsEntity: number
   readSystemStatus: number
 }
 
@@ -62,6 +69,9 @@ export interface ThrowConfig {
   createDocument?: unknown
   getDocument?: unknown
   listDocumentTree?: unknown
+  listSettingsEntities?: unknown
+  getSettingsEntity?: unknown
+  saveSettingsEntity?: unknown
   readSystemStatus?: unknown
 }
 
@@ -82,6 +92,27 @@ export interface FakeDocument {
   updatedAt: UtcTimestamp
 }
 
+/**
+ * 内存里的一条设定实体（比契约多带 `revisionSeq` 便于 fake 推进 revision）。
+ *
+ * 动态字段值就是 `values` 里的普通 JSON——表结构里**没有**它们的列，
+ * 这一点和 `settings_entities.values_json` 的真实语义一致。
+ */
+export interface FakeSettingsEntity {
+  id: string
+  workspaceId: string
+  projectId: string
+  schemaTemplateId: string
+  name: string
+  values: Readonly<Record<string, unknown>>
+  orderKey: string
+  deleted: DeletedFlag
+  revisionSeq: number
+  revision: Revision
+  createdAt: UtcTimestamp
+  updatedAt: UtcTimestamp
+}
+
 export interface FakeHarness {
   /** 装配后填充（先建 harness，端口回调里要读 `throwOn` 等状态）。 */
   deps: ApplicationDeps
@@ -89,6 +120,7 @@ export interface FakeHarness {
   readonly counts: FakeCounts
   readonly documents: Map<string, FakeDocument>
   readonly projects: Map<string, { readonly name: string; readonly projectId: string }>
+  readonly settingsEntities: Map<string, FakeSettingsEntity>
   readonly commits: CommitDraftRequest[]
   readonly watermarks: Map<string, number>
   readonly throwOn: ThrowConfig
@@ -98,12 +130,17 @@ export interface FakeHarness {
   lastCreateDocument?: CreateDocumentRequest
   lastListTree?: ListDocumentTreeRequest
   lastGetDocument?: GetDocumentRequest
+  lastListSettings?: ListSettingsEntitiesRequest
+  lastGetSettings?: GetSettingsEntityRequest
+  lastSaveSettings?: SaveSettingsEntityRequest
   facts: SystemStatusFacts
 }
 
 export interface FakeOptions {
   /** 预置文档（工作区/作品归属由各条自己声明）。 */
   readonly documents?: readonly FakeDocument[]
+  /** 预置设定实体。 */
+  readonly settingsEntities?: readonly FakeSettingsEntity[]
   readonly clock?: Clock
   readonly ids?: ApplicationIdGenerator
   /** 传入即启用请求级幂等（通常传 `createMemoryIdempotencyLedger().port`）。 */
@@ -137,6 +174,45 @@ export function makeDocument(overrides: Partial<FakeDocument> = {}): FakeDocumen
     createdAt: TEST_NOW,
     updatedAt: TEST_NOW,
     ...overrides,
+  }
+}
+
+/** 建一条内存设定实体（默认：测试工作区、作品 A、未删除、revision r00000001）。 */
+export function makeSettingsEntity(
+  overrides: Partial<FakeSettingsEntity> = {},
+): FakeSettingsEntity {
+  const revisionSeq = overrides.revisionSeq ?? 1
+  return {
+    id: 'wld-1',
+    workspaceId: TEST_WORKSPACE,
+    projectId: TEST_PROJECT,
+    schemaTemplateId: 'tpl-faction',
+    name: '青云门',
+    values: { 阵营: '正道' },
+    orderKey: 'a1',
+    deleted: 0,
+    revisionSeq,
+    revision: encodeRevision(revisionSeq),
+    createdAt: TEST_NOW,
+    updatedAt: TEST_NOW,
+    ...overrides,
+  }
+}
+
+/** 把 fake 设定实体转成契约形状（**剥掉 `revisionSeq`**，它只是 fake 的内部水位线）。 */
+function toSettingsEntity(entity: FakeSettingsEntity): SettingsEntity {
+  return {
+    id: entity.id,
+    workspaceId: entity.workspaceId as WorkspaceId,
+    projectId: entity.projectId as ProjectId,
+    schemaTemplateId: entity.schemaTemplateId,
+    name: entity.name,
+    values: entity.values,
+    orderKey: entity.orderKey,
+    deleted: entity.deleted,
+    revision: entity.revision,
+    createdAt: entity.createdAt,
+    updatedAt: entity.updatedAt,
   }
 }
 
@@ -183,6 +259,7 @@ export function sequentialIds(): ApplicationIdGenerator {
     batch: () => next('batch'),
     project: () => next('prj') as never,
     document: () => next('doc') as never,
+    settingsEntity: () => next('wld'),
   }
 }
 
@@ -209,10 +286,15 @@ export function createFakeHarness(options: FakeOptions = {}): FakeHarness {
     createDocument: 0,
     getDocument: 0,
     listDocumentTree: 0,
+    listSettingsEntities: 0,
+    getSettingsEntity: 0,
+    saveSettingsEntity: 0,
     readSystemStatus: 0,
   }
   const documents = new Map<string, FakeDocument>()
   for (const document of options.documents ?? []) documents.set(document.documentId, document)
+  const settingsEntities = new Map<string, FakeSettingsEntity>()
+  for (const entity of options.settingsEntities ?? []) settingsEntities.set(entity.id, entity)
 
   const harness: FakeHarness = {
     deps: undefined as unknown as ApplicationDeps,
@@ -220,6 +302,7 @@ export function createFakeHarness(options: FakeOptions = {}): FakeHarness {
     counts,
     documents,
     projects: new Map(),
+    settingsEntities,
     commits: [],
     watermarks: new Map(),
     throwOn: {},
@@ -345,6 +428,139 @@ export function createFakeHarness(options: FakeOptions = {}): FakeHarness {
           .filter((document) => request.includeDeleted || document.deleted === 0)
           .map((document) => summaryOf(document))
         return Promise.resolve(ok(list))
+      },
+    },
+    settingsEntities: {
+      listSettingsEntities: (request) => {
+        counts.listSettingsEntities += 1
+        harness.lastListSettings = request
+        maybeThrow(harness.throwOn.listSettingsEntities)
+        const list = [...settingsEntities.values()]
+          // 🔴 工作区过滤是安全边界：越权数据绝不能出现在结果里。
+          .filter((entity) => entity.workspaceId === request.context.workspaceId)
+          .filter((entity) => request.projectId === null || entity.projectId === request.projectId)
+          .filter(
+            (entity) =>
+              request.schemaTemplateId === null ||
+              entity.schemaTemplateId === request.schemaTemplateId,
+          )
+          .filter((entity) => request.includeDeleted || entity.deleted === 0)
+          .sort((left, right) =>
+            left.orderKey === right.orderKey
+              ? left.id.localeCompare(right.id)
+              : left.orderKey.localeCompare(right.orderKey),
+          )
+          .map((entity) => toSettingsEntity(entity))
+        return Promise.resolve(ok<readonly SettingsEntity[]>(list))
+      },
+      getSettingsEntity: (request) => {
+        counts.getSettingsEntity += 1
+        harness.lastGetSettings = request
+        maybeThrow(harness.throwOn.getSettingsEntity)
+        const entity = settingsEntities.get(request.entityId)
+        if (entity === undefined) {
+          return Promise.resolve(
+            errOf('NOT_FOUND', '设定实体不存在', request.context.requestId, {
+              field: 'entityId',
+            }),
+          )
+        }
+        // 归属先于存在性判定：跨工作区一律 `PERMISSION_WORKSPACE_MISMATCH`，
+        // 否则越权访问在日志里会伪装成普通的「不存在」。
+        if (entity.workspaceId !== request.context.workspaceId) {
+          return Promise.resolve(
+            errOf('PERMISSION_WORKSPACE_MISMATCH', '设定实体不属于当前工作区', request.context.requestId, {
+              field: 'entityId',
+            }),
+          )
+        }
+        if (entity.deleted !== 0) {
+          return Promise.resolve(
+            errOf('NOT_FOUND', '设定实体已被删除', request.context.requestId, { field: 'entityId' }),
+          )
+        }
+        return Promise.resolve(ok(toSettingsEntity(entity)))
+      },
+      saveSettingsEntity: (request) => {
+        counts.saveSettingsEntity += 1
+        harness.lastSaveSettings = request
+        maybeThrow(harness.throwOn.saveSettingsEntity)
+        const requestId = request.context.requestId
+        const existing = settingsEntities.get(request.entityId)
+
+        if (request.isCreate) {
+          // 新建必须不带 expectedRevision：带上了说明调用方在用更新的语义做新建。
+          if (request.context.expectedRevision !== null) {
+            return Promise.resolve(
+              errOf('VALIDATION_FAILED', '新建设定实体时 expectedRevision 必须为 null', requestId, {
+                field: 'context.expectedRevision',
+              }),
+            )
+          }
+          if (existing !== undefined) {
+            return Promise.resolve(
+              errOf('ALREADY_EXISTS', '设定实体 ID 已存在', requestId, { field: 'entityId' }),
+            )
+          }
+          const siblings = [...settingsEntities.values()].filter(
+            (entity) => entity.projectId === request.projectId && entity.deleted === 0,
+          )
+          const orderKey = request.orderKey ?? `a${siblings.length + 1}`
+          settingsEntities.set(
+            request.entityId,
+            makeSettingsEntity({
+              id: request.entityId,
+              workspaceId: request.context.workspaceId,
+              projectId: request.projectId,
+              schemaTemplateId: request.schemaTemplateId,
+              name: request.name,
+              values: request.values,
+              orderKey,
+              createdAt: request.occurredAt,
+              updatedAt: request.occurredAt,
+            }),
+          )
+          return Promise.resolve(
+            ok({ entityId: request.entityId, revision: encodeRevision(1), orderKey }),
+          )
+        }
+
+        if (existing === undefined) {
+          return Promise.resolve(
+            errOf('NOT_FOUND', '设定实体不存在', requestId, { field: 'entityId' }),
+          )
+        }
+        if (existing.workspaceId !== request.context.workspaceId) {
+          return Promise.resolve(
+            errOf('PERMISSION_WORKSPACE_MISMATCH', '设定实体不属于当前工作区', requestId, {
+              field: 'entityId',
+            }),
+          )
+        }
+        if (existing.deleted !== 0) {
+          return Promise.resolve(errOf('NOT_FOUND', '设定实体已被删除', requestId, { field: 'entityId' }))
+        }
+        const expected = request.context.expectedRevision
+        if (expected !== null && expected !== existing.revision) {
+          return Promise.resolve(
+            errOf('REVISION_CONFLICT', '设定实体已被其他改动推进，请基于最新版本重试', requestId, {
+              field: 'context.expectedRevision',
+            }),
+          )
+        }
+        existing.name = request.name
+        existing.values = request.values
+        if (request.orderKey !== null) existing.orderKey = request.orderKey
+        existing.updatedAt = request.occurredAt
+        existing.revisionSeq += 1
+        existing.revision = encodeRevision(existing.revisionSeq)
+        return Promise.resolve(
+          ok({
+            entityId: existing.id,
+            revision: existing.revision,
+            orderKey: existing.orderKey,
+          }),
+        )
       },
     },
     system: {

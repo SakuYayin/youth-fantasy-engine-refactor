@@ -25,6 +25,7 @@
     "@yfe/contracts": "*",
     "@yfe/domain": "*",
     "@yfe/persistence-sqlite": "*",
+    "@yfe/schema-tabs": "*",
     "@yfe/ui": "*",
     "codemirror": "^6.0.2",
     "vue": "^3.5.44"

@@ -99,6 +99,9 @@ const {
   createDocument: createDocumentUseCase,
   getDocument: getDocumentUseCase,
   listDocumentTree: listDocumentTreeUseCase,
+  listSettingsEntities: listSettingsEntitiesUseCase,
+  getSettingsEntity: getSettingsEntityUseCase,
+  saveSettingsEntity: saveSettingsEntityUseCase,
   systemStatus: systemStatusUseCase,
 } = application;
 
@@ -244,8 +247,19 @@ const DISPATCH = {
   getDocument: (payload, requestId) => withApplication(requestId, (deps) => getDocumentUseCase(deps, payload)),
   createProject: (payload, requestId) => withApplication(requestId, (deps) => createProjectUseCase(deps, payload)),
   createDocument: (payload, requestId) => withApplication(requestId, (deps) => createDocumentUseCase(deps, payload)),
+  listSettingsEntities: (payload, requestId) =>
+    withApplication(requestId, (deps) => listSettingsEntitiesUseCase(deps, payload)),
+  getSettingsEntity: (payload, requestId) =>
+    withApplication(requestId, (deps) => getSettingsEntityUseCase(deps, payload)),
+  saveSettingsEntity: (payload, requestId) =>
+    withApplication(requestId, (deps) => saveSettingsEntityUseCase(deps, payload)),
 };
-const WRITE_METHODS = new Set(['saveDraft', 'createProject', 'createDocument']);
+const WRITE_METHODS = new Set([
+  'saveDraft',
+  'createProject',
+  'createDocument',
+  'saveSettingsEntity',
+]);
 
 // ---------------------------------------------------------------------------
 // 6) 请求循环

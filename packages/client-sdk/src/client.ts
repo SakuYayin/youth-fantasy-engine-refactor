@@ -2,7 +2,7 @@
  * `createClient` 的实现（ADR 0006 D2）。
  *
  * 职责：
- * 1. 六个方法名与 `IPC_METHODS` 逐字一致；
+ * 1. 方法名与 `IPC_METHODS` 逐字一致；
  * 2. **不抛异常**：一律 `Result<T>`，成功 `ok(value)`，失败 `err(payload)`；
  * 3. 白名单守卫（白名单外的方法**不发往 transport**）；
  * 4. 超时（默认 15000ms，可由 options 覆盖）→ `NETWORK_TIMEOUT` / `retryable: true`；
@@ -20,6 +20,12 @@ import type {
   ProjectCreateOutput,
   SaveDraftInput,
   SaveDraftOutput,
+  SettingsEntityGetInput,
+  SettingsEntityGetOutput,
+  SettingsEntityListInput,
+  SettingsEntityListOutput,
+  SettingsEntitySaveInput,
+  SettingsEntitySaveOutput,
   SystemStatusOutput,
 } from '@yfe/contracts'
 import type { RequestId } from '@yfe/contracts'
@@ -152,7 +158,7 @@ export function createRawInvoke(transport: ClientTransport, options?: CreateClie
   }
 }
 
-/** 把 `RawInvoke` 收敛成六个具名方法：无参方法载荷为 `null`，返回值恰好是契约出参类型。 */
+/** 把 `RawInvoke` 收敛成具名方法：无参方法载荷为 `null`，返回值恰好是契约出参类型。 */
 function createRendererClient(invoke: RawInvoke): RendererClient {
   return {
     saveDraft: (input: SaveDraftInput) => invoke('saveDraft', input) as Promise<Result<SaveDraftOutput>>,
@@ -164,6 +170,12 @@ function createRendererClient(invoke: RawInvoke): RendererClient {
     createDocument: (input: DocumentCreateInput) =>
       invoke('createDocument', input) as Promise<Result<DocumentCreateOutput>>,
     systemStatus: () => invoke('systemStatus', null) as Promise<Result<SystemStatusOutput>>,
+    listSettingsEntities: (input: SettingsEntityListInput) =>
+      invoke('listSettingsEntities', input) as Promise<Result<SettingsEntityListOutput>>,
+    getSettingsEntity: (input: SettingsEntityGetInput) =>
+      invoke('getSettingsEntity', input) as Promise<Result<SettingsEntityGetOutput>>,
+    saveSettingsEntity: (input: SettingsEntitySaveInput) =>
+      invoke('saveSettingsEntity', input) as Promise<Result<SettingsEntitySaveOutput>>,
   }
 }
 

@@ -42,6 +42,21 @@ export const MAX_SUMMARY_LENGTH = 500
 export const MAX_SESSION_ID_LENGTH = 128
 /** 模板 ID 长度上限。 */
 export const MAX_TEMPLATE_ID_LENGTH = 128
+/**
+ * 设定实体 / 人物卡名称长度上限。
+ *
+ * 🔴 必须与 `@yfe/persistence-sqlite` 的 `MAX_ENTITY_NAME_LENGTH` 保持一致：
+ *    应用层先拦一次是为了给出**带字段名**的错误，存储层那次是最后一道防线。
+ */
+export const MAX_ENTITY_NAME_LENGTH = 200
+/**
+ * 排序键长度上限。
+ *
+ * 与 `@yfe/domain/orderKey` 的 `MAX_KEY_LENGTH` 一致（那里是私有常量，不导出，
+ * 所以这里重复一个数字并注明来源）。**只校验长度**：分数索引的字符集规则
+ * 由存储层的 `requireOrderKey` 判定，本层不引入 `@yfe/domain` 依赖。
+ */
+export const MAX_ORDER_KEY_LENGTH = 512
 
 // ---------------------------------------------------------------------------
 // 错误构造小工具（统一文案风格，避免每个用例各写一遍）
@@ -133,6 +148,24 @@ export function requireText(
     })
   }
   return { ok: true, value: text }
+}
+
+/**
+ * 动态 Schema 字段值：必须是 JSON **对象**（`null` 与数组都不算）。
+ *
+ * 这里只判定「是不是对象」，不逐字段判类型——字段由 `schemaTemplateId` 指向的模板决定，
+ * 应用层不认识具体模板。真正的序列化可行性由存储层的 `stringifyValues` 兜底。
+ */
+export function requireValuesRecord(
+  value: unknown,
+  field: string,
+  requestId: RequestId,
+): Result<Readonly<Record<string, unknown>>> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    const received = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value
+    return badField(field, requestId, `${field} 必须是 JSON 对象`, { received })
+  }
+  return { ok: true, value: value as Record<string, unknown> }
 }
 
 /** 可选文本：`undefined`/`null` 归一为缺省值；不做类型猜测。 */

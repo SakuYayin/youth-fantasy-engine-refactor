@@ -46,6 +46,7 @@ import {
   nextRevision,
   orderKeyForPlacement,
   parseValues,
+  requireOrderKey,
   runRead,
   runWrite,
   stringifyValues,
@@ -99,6 +100,27 @@ export interface SettingsEntityListInput {
 export interface SettingsEntityPatch {
   readonly name?: string
   readonly values?: Readonly<Record<string, unknown>>
+  /**
+   * 重排：显式排序键（分数索引）。省略则位置不变。
+   *
+   * 直接给键而不是给 `placement`：设定表格是自由列表，界面已经知道要落在哪两个
+   * 相邻行之间并算好了键；这里再要求它描述锚点会丢掉"首位之前"这类位置。
+   * 非法键 → `VALIDATION_FAILED`（调用方的错，不是库损坏）。
+   */
+  readonly orderKey?: string
+}
+
+/**
+ * 工作区级列表入参：**没有 `projectId`**。
+ *
+ * 与 {@link SettingsEntityListInput} 的唯一区别是作用范围。刻意不复用同一个接口，
+ * 是为了让「忘了传 projectId」在类型层面就不可能发生（而不是悄悄退化成全工作区查询）。
+ */
+export interface SettingsEntityWorkspaceListInput {
+  readonly context: ReadContext
+  readonly schemaTemplateId?: string
+  readonly schemaTemplateIds?: readonly string[]
+  readonly includeDeleted?: boolean
 }
 
 interface SettingsEntityRow {
@@ -366,6 +388,46 @@ export function getSettingsEntity(
 }
 
 /**
+ * 解析模板过滤参数。
+ *
+ * - `null` = 不按模板过滤（列全部）；
+ * - `[]` = 调用方显式传了空数组，语义是「不要任何模板」——`IN ()` 在 SQLite 里是
+ *   语法错误，所以这种输入必须在拼 SQL 之前短路成空结果。
+ */
+function resolveTemplateIds(
+  schemaTemplateId: string | undefined,
+  schemaTemplateIds: readonly string[] | undefined,
+): readonly string[] | null {
+  if (schemaTemplateIds !== undefined) return schemaTemplateIds
+  return schemaTemplateId === undefined ? null : [schemaTemplateId]
+}
+
+/** 把模板过滤条件追加到已有的 `WHERE` 片段之后。 */
+function appendTemplateFilter(
+  sql: string,
+  params: string[],
+  templateIds: readonly string[] | null,
+): string {
+  if (templateIds === null || templateIds.length === 0) return sql
+  params.push(...templateIds)
+  return `${sql} AND schema_template_id IN (${templateIds.map(() => '?').join(', ')})`
+}
+
+/** 把数据库行映射成实体；任何一行的 `values_json` 损坏都会中止整个列表。 */
+function mapSettingsRows(
+  rows: readonly SettingsEntityRow[],
+  requestId: RequestId,
+): Result<readonly SettingsEntity[]> {
+  const entities: SettingsEntity[] = []
+  for (const row of rows) {
+    const valuesResult = parseValues(row.values_json, requestId, row.id)
+    if (!valuesResult.ok) return valuesResult
+    entities.push(toSettingsEntity(row, valuesResult.value))
+  }
+  return ok(entities)
+}
+
+/**
  * 列出作品下的设定实体（按 `order_key, id` 排序）。
  *
  * 默认只返回未删；`includeDeleted: true` 时含已删（`deleted` 字段可区分）。
@@ -382,10 +444,8 @@ export function listSettingsEntities(
   if (!isWellFormedId(projectId)) {
     return errOf('VALIDATION_MALFORMED_ID', '作品 ID 格式不合法', requestId, { field: 'projectId' })
   }
-  const templateIds: readonly string[] =
-    input.schemaTemplateIds ?? (input.schemaTemplateId === undefined ? [] : [input.schemaTemplateId])
-  if (templateIds.length === 0 && input.schemaTemplateIds !== undefined) {
-    // 显式传了空数组 = "不要任何模板"：`IN ()` 在 SQLite 里是语法错误，直接返回空。
+  const templateIds = resolveTemplateIds(input.schemaTemplateId, input.schemaTemplateIds)
+  if (templateIds !== null && templateIds.length === 0) {
     return ok([])
   }
   const includeDeleted = input.includeDeleted === true
@@ -400,21 +460,49 @@ export function listSettingsEntities(
     const params: string[] = [context.workspaceId, projectId]
     let sql = `SELECT ${SETTINGS_ENTITY_COLUMNS} FROM settings_entities
                 WHERE workspace_id = ? AND project_id = ?`
-    if (templateIds.length > 0) {
-      sql += ` AND schema_template_id IN (${templateIds.map(() => '?').join(', ')})`
-      params.push(...templateIds)
-    }
+    sql = appendTemplateFilter(sql, params, templateIds)
     if (!includeDeleted) sql += ' AND deleted = 0'
     sql += ' ORDER BY order_key, id'
 
     const rows = db.prepare(sql).all(...params) as readonly SettingsEntityRow[]
-    const entities: SettingsEntity[] = []
-    for (const row of rows) {
-      const valuesResult = parseValues(row.values_json, requestId, row.id)
-      if (!valuesResult.ok) return valuesResult
-      entities.push(toSettingsEntity(row, valuesResult.value))
-    }
-    return ok(entities)
+    return mapSettingsRows(rows, requestId)
+  })
+}
+
+/**
+ * 列出**整个工作区**的设定实体（跨作品），按 `project_id, order_key, id` 排序。
+ *
+ * 与 {@link listSettingsEntities} 的差别只有「作品」这一维：
+ * - 不校验作品存在性（这里根本没有指定的作品可校验），因此**已软删作品下的实体仍会出现**；
+ *   回收站 / 全局检索视图需要看得到它们。
+ * - `includeDeleted` 语义相同：false（默认）时排除已软删的实体本身。
+ *
+ * 排序的第一维是 `project_id`：跨作品列表若只按 `order_key` 排，不同作品的键会交错，
+ * 结果虽然稳定但对人不可读。
+ */
+export function listSettingsEntitiesInWorkspace(
+  db: SqliteDatabase,
+  input: SettingsEntityWorkspaceListInput,
+): Result<readonly SettingsEntity[]> {
+  const { context } = input
+  const requestId = context.requestId
+  const contextErr = validateReadContext(context)
+  if (contextErr !== null) return contextErr
+  const templateIds = resolveTemplateIds(input.schemaTemplateId, input.schemaTemplateIds)
+  if (templateIds !== null && templateIds.length === 0) {
+    return ok([])
+  }
+  const includeDeleted = input.includeDeleted === true
+
+  return runRead(requestId, '列出设定实体失败', () => {
+    const params: string[] = [context.workspaceId]
+    let sql = `SELECT ${SETTINGS_ENTITY_COLUMNS} FROM settings_entities WHERE workspace_id = ?`
+    sql = appendTemplateFilter(sql, params, templateIds)
+    if (!includeDeleted) sql += ' AND deleted = 0'
+    sql += ' ORDER BY project_id, order_key, id'
+
+    const rows = db.prepare(sql).all(...params) as readonly SettingsEntityRow[]
+    return mapSettingsRows(rows, requestId)
   })
 }
 
@@ -437,12 +525,16 @@ export function updateSettingsEntity(
   if (!isWellFormedId(entityId)) {
     return errOf('VALIDATION_MALFORMED_ID', '设定实体 ID 格式不合法', requestId, { field: 'entityId' })
   }
-  if (patch.name === undefined && patch.values === undefined) {
+  if (patch.name === undefined && patch.values === undefined && patch.orderKey === undefined) {
     return errOf('VALIDATION_MISSING_FIELD', '没有需要更新的字段', requestId, { field: 'patch' })
   }
   if (patch.name !== undefined) {
     const nameResult = validateEntityName(patch.name, requestId)
     if (!nameResult.ok) return nameResult
+  }
+  if (patch.orderKey !== undefined) {
+    const orderKeyResult = requireOrderKey(patch.orderKey, requestId)
+    if (!orderKeyResult.ok) return orderKeyResult
   }
   let valuesJson: string | null = null
   if (patch.values !== undefined) {
@@ -465,7 +557,12 @@ export function updateSettingsEntity(
 
     const nextName = patch.name ?? row.name
     const nextValuesJson = valuesJson ?? row.values_json
-    if (nextName === row.name && nextValuesJson === row.values_json) {
+    const nextOrderKey = patch.orderKey ?? row.order_key
+    if (
+      nextName === row.name &&
+      nextValuesJson === row.values_json &&
+      nextOrderKey === row.order_key
+    ) {
       return ok({ revision: row.revision as Revision })
     }
 
@@ -473,12 +570,14 @@ export function updateSettingsEntity(
     const info = db
       .prepare(
         `UPDATE settings_entities
-            SET name = ?, values_json = ?, revision = ?, revision_seq = revision_seq + 1, updated_at = ?
+            SET name = ?, values_json = ?, order_key = ?, revision = ?,
+                revision_seq = revision_seq + 1, updated_at = ?
           WHERE id = ? AND workspace_id = ? AND revision = ?`,
       )
       .run(
         nextName,
         nextValuesJson,
+        nextOrderKey,
         revision,
         deps.clock.now(),
         entityId,

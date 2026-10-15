@@ -437,10 +437,13 @@ async function collectGuiChecks(window) {
 
   const bridge = raw?.bridge ?? {};
   push('preload.bridge', bridge.call === true, `typeof window.yfe.call = ${String(bridge.call)}`);
+  const bridged = Array.isArray(bridge.methods) ? bridge.methods : [];
+  // 不写死数量：白名单是四份副本（channels / ipc-methods / preload.cjs / client-sdk），
+  // 加一个 IPC 方法就会让「=6」这种断言过期；这里改成与权威 `IPC_METHODS` 逐项对齐。
   push(
-    'preload.methods=6',
-    Array.isArray(bridge.methods) && bridge.methods.length === 6,
-    Array.isArray(bridge.methods) ? bridge.methods.join(',') : 'n/a',
+    `preload.methods=${IPC_METHODS.length}`,
+    bridged.length === IPC_METHODS.length && IPC_METHODS.every((method) => bridged.includes(method)),
+    bridged.join(','),
   );
   push('vue.mounted', (raw?.dom?.appChildren ?? 0) > 0, `#app children=${raw?.dom?.appChildren}`);
   push('editor.mounted', raw?.dom?.editorPresent === true, raw?.dom?.editorPresent ? '.cm-editor 已挂载' : '未找到 .cm-editor');

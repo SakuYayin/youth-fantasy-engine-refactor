@@ -18,6 +18,9 @@ const IPC_METHODS = Object.freeze([
   'createProject',
   'createDocument',
   'systemStatus',
+  'listSettingsEntities',
+  'getSettingsEntity',
+  'saveSettingsEntity',
 ]);
 
 module.exports = { IPC_METHODS };

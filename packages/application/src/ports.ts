@@ -38,6 +38,7 @@ import {
   type Revision,
   type SaveDraftInput,
   type SaveDraftOutput,
+  type SettingsEntity,
   type UtcTimestamp,
   type WorkspaceId,
   type WriteContext,
@@ -87,6 +88,14 @@ export interface IdGenerator {
 export interface ApplicationIdGenerator extends IdGenerator {
   project(): ProjectId
   document(): DocumentId
+  /**
+   * 设定实体主键。
+   *
+   * 与人物卡共用 `settings_entities` 表，但**新建通用设定实体**一律用 `wld_` 前缀：
+   * 前缀是 ID 自带的类型标签（`isWellFormedId` 之外的人眼分类），人物卡的 `chr_`
+   * 由人物卡用例负责，不能靠这里的默认值产生。
+   */
+  settingsEntity(): string
 }
 
 /** 应用层所需的全部持久化端口。装配由宿主完成，本包不含任何适配器实现。 */
@@ -94,6 +103,7 @@ export interface ApplicationPorts {
   readonly draft: DraftPersistencePort
   readonly projects: ProjectPort
   readonly documents: DocumentPort
+  readonly settingsEntities: SettingsEntityPort
   readonly system: SystemStatusPort
   /**
    * 幂等记录端口（可选）。
@@ -279,6 +289,87 @@ export interface DocumentPort {
 }
 
 // ---------------------------------------------------------------------------
+// 设定实体
+// ---------------------------------------------------------------------------
+
+/**
+ * 列出设定实体的请求。
+ *
+ * `projectId === null` 表示**工作区级**列表（跨作品）；`schemaTemplateId === null`
+ * 表示不按模板过滤。两个可选字段在用例层就已归一成 `null`，端口因此不必
+ * 区分「没传」与「传了 undefined」——这对适配器是实打实的简化。
+ */
+export interface ListSettingsEntitiesRequest {
+  readonly context: ReadContext
+  readonly projectId: ProjectId | null
+  readonly schemaTemplateId: string | null
+  readonly includeDeleted: boolean
+}
+
+export interface GetSettingsEntityRequest {
+  readonly context: ReadContext
+  readonly entityId: string
+}
+
+export interface SaveSettingsEntityRequest {
+  readonly context: WriteContext
+  /**
+   * 实体主键：新建时由用例在调用端口**之前**生成（与 `createProject` 同规矩：
+   * 「返回给调用方的 ID」与「落库的 ID」必须同源），更新时等于入参里的 `entityId`。
+   */
+  readonly entityId: string
+  /**
+   * 这次是新建还是更新。
+   *
+   * 用例已经用「入参 `entityId` 是否为空」判定过一次，这里再显式传下来，是为了让
+   * 适配器不必重复推断——判定规则将来若变（比如支持「按 ID upsert」），只改用例层。
+   */
+  readonly isCreate: boolean
+  readonly projectId: ProjectId
+  readonly schemaTemplateId: string
+  readonly name: string
+  readonly values: Readonly<Record<string, unknown>>
+  /** 显式排序键；`null` = 由适配器按末位追加（只在新建时有意义）。 */
+  readonly orderKey: string | null
+  /** 用例时钟打点；适配器应当原样当作本次写入的时间戳。 */
+  readonly occurredAt: UtcTimestamp
+}
+
+export interface SettingsEntityWriteResult {
+  readonly entityId: string
+  readonly revision: Revision
+  readonly orderKey: string
+}
+
+/**
+ * 设定实体端口。
+ *
+ * 🔴 读路径**必须自行按 `context.workspaceId` 过滤**（跨工作区泄漏是安全缺陷）。
+ * 用例层拿不到 `SettingsEntity` 的 `workspaceId`（它继承 `WorkspaceEntity`，
+ * 但契约输出里带的是实体本身，无法用来授权比对），因此归属校验只能在适配器/存储层做，
+ * 用例层能做的只是「把 `context` 原样传下去，绝不接受 payload 自报的工作区」。
+ * 🔴 跨工作区访问必须返回 `PERMISSION_WORKSPACE_MISMATCH` 而不是 `NOT_FOUND`：
+ *    两者混淆会让越权访问在日志里看起来像普通的「不存在」。
+ */
+export interface SettingsEntityPort {
+  /** 只读；已软删实体默认不可见。 */
+  listSettingsEntities(
+    request: ListSettingsEntitiesRequest,
+  ): Promise<Result<readonly SettingsEntity[]>>
+  getSettingsEntity(request: GetSettingsEntityRequest): Promise<Result<SettingsEntity>>
+  /**
+   * 新建或更新。
+   *
+   * 🔴 更新必须走 `context.expectedRevision` 乐观锁，过期返回 `REVISION_CONFLICT`；
+   *    新建必须要求 `expectedRevision === null`（否则调用方是在用更新的语义做新建）。
+   * 🔴 `values` 是**整体替换**而不是深合并。
+   */
+  saveSettingsEntity(
+    request: SaveSettingsEntityRequest,
+  ): Promise<Result<SettingsEntityWriteResult>>
+}
+
+// ---------------------------------------------------------------------------
 // 系统状态
 // ---------------------------------------------------------------------------
 
@@ -364,6 +455,7 @@ export function createApplicationIds(rng?: RandomSource): ApplicationIdGenerator
     batch: () => newIds.request(rng),
     project: () => newIds.project(rng),
     document: () => newIds.document(rng),
+    settingsEntity: () => newIds.worldSetting(rng),
   }
 }
 

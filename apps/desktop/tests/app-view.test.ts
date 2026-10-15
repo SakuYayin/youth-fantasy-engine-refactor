@@ -32,6 +32,8 @@ function harness() {
     readOnly: false, pendingOutboxCount: 0, lastSavedAt: null, projectId: 'project_1', tree: [],
     selectedDocumentId: 'doc_1', title: '第一章', body: '原始正文', charCount: 4, revision: 'r1',
     saveStatus: 'saved', saveDetail: null, conflict: null, lastError: null, expandedIds: [],
+    settingsEntities: [], settingsLoading: false, selectedSettingsEntityId: null,
+    selectedSettingsEntity: null,
   }
   let notify: ((snapshot: AppSnapshot) => void) | undefined
   let guard: (() => boolean) | null = null
@@ -42,6 +44,9 @@ function harness() {
     createChapter: async () => true, selectDocument: async () => true,
     edit: vi.fn(), flush: async () => true, applyExternalUpdate: () => true,
     retrySave: () => {}, resolveConflict: () => {}, toggleExpanded: () => {},
+    loadSettingsEntities: async () => true, selectSettingsEntity: async () => true,
+    refreshSettingsEntity: async () => true,
+    submitSettingsEntity: async () => ({ ok: false, code: 'NOT_IMPLEMENTED', message: '测试桩' }),
     setNavigationGuard: (value) => { guard = value }, dispose: () => {},
   }
   const wrapper = mount(App, { props: { state } })

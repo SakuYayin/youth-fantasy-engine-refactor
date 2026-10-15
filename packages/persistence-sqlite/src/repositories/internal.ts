@@ -103,6 +103,15 @@ export const MAX_ENTITY_NAME_LENGTH = 200
 export type Placement =
   | { readonly mode: 'end' }
   | { readonly mode: 'after'; readonly afterId: string }
+  /**
+   * 调用方自带的显式排序键（分数索引）。
+   *
+   * 通用设定实体的表格界面允许直接给出键值；这一变体让它不必为了
+   * 「按给定键落位」而伪造一个 `after` 锚点。键仍必须通过
+   * `isValidOrderKey`，非法一律 `VALIDATION_FAILED`（这是**调用方**的错误，
+   * 不是库内容损坏，所以不能走 `STORAGE_CORRUPT`）。
+   */
+  | { readonly mode: 'explicit'; readonly orderKey: string }
 
 // ---------------------------------------------------------------------------
 // 事务运行器与错误翻译
@@ -354,6 +363,10 @@ export function orderKeyForPlacement(
   scope: OrderKeyScope,
   placement: Placement,
 ): Result<OrderKey> {
+  if (placement.mode === 'explicit') {
+    // 显式键不查库：调用方已经算好了位置，本层只负责挡住非法值。
+    return requireOrderKey(placement.orderKey, scope.requestId)
+  }
   if (placement.mode === 'end') {
     const excludeClause = scope.excludeId === null ? '' : 'AND id <> ?'
     const args: Array<string | null> = [...scope.siblingArgs]
@@ -420,6 +433,19 @@ function invalidKeyError(key: string | null, scope: OrderKeyScope): Err | null {
 
 function okKey(key: OrderKey): Result<OrderKey> {
   return { ok: true, value: key }
+}
+
+/**
+ * 校验调用方自带的排序键。
+ *
+ * 与 `invalidKeyError` 的区别是**归责对象**：那里读的是库里的既有值，非法 = 库损坏
+ * （`STORAGE_CORRUPT`）；这里读的是本次入参，非法 = 调用方传错（`VALIDATION_FAILED`）。
+ */
+export function requireOrderKey(value: unknown, requestId: RequestId): Result<OrderKey> {
+  if (!isValidOrderKey(value)) {
+    return errOf('VALIDATION_FAILED', '排序键格式不合法', requestId, { field: 'orderKey' })
+  }
+  return { ok: true, value }
 }
 
 // ---------------------------------------------------------------------------

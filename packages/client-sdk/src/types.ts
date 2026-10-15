@@ -20,6 +20,12 @@ import type {
   Result,
   SaveDraftInput,
   SaveDraftOutput,
+  SettingsEntityGetInput,
+  SettingsEntityGetOutput,
+  SettingsEntityListInput,
+  SettingsEntityListOutput,
+  SettingsEntitySaveInput,
+  SettingsEntitySaveOutput,
   SystemStatusOutput,
 } from '@yfe/contracts'
 
@@ -57,16 +63,28 @@ export interface ClientContract {
   readonly createProject: { readonly input: ProjectCreateInput; readonly output: ProjectCreateOutput }
   readonly createDocument: { readonly input: DocumentCreateInput; readonly output: DocumentCreateOutput }
   readonly systemStatus: { readonly input: null; readonly output: SystemStatusOutput }
+  readonly listSettingsEntities: {
+    readonly input: SettingsEntityListInput
+    readonly output: SettingsEntityListOutput
+  }
+  readonly getSettingsEntity: {
+    readonly input: SettingsEntityGetInput
+    readonly output: SettingsEntityGetOutput
+  }
+  readonly saveSettingsEntity: {
+    readonly input: SettingsEntitySaveInput
+    readonly output: SettingsEntitySaveOutput
+  }
 }
 
-/** 六个 IPC 方法名（= `IPC_METHODS` 的联合）。 */
+/** IPC 方法名（= `IPC_METHODS` 的联合）。 */
 export type ClientMethod = keyof ClientContract
 
 /**
  * 渲染层拿到的客户端。
  *
  * 语义（ADR 0006 D2）：**不抛异常**，一律返回 `Result<T>`；
- * 失败一律是已经脱敏的 `ErrorPayload`。六个方法名与 D2 的表逐字一致。
+ * 失败一律是已经脱敏的 `ErrorPayload`。方法名与 D2 的表逐字一致。
  */
 export interface RendererClient {
   readonly saveDraft: (input: SaveDraftInput) => Promise<Result<SaveDraftOutput>>
@@ -75,4 +93,13 @@ export interface RendererClient {
   readonly createProject: (input: ProjectCreateInput) => Promise<Result<ProjectCreateOutput>>
   readonly createDocument: (input: DocumentCreateInput) => Promise<Result<DocumentCreateOutput>>
   readonly systemStatus: () => Promise<Result<SystemStatusOutput>>
+  readonly listSettingsEntities: (
+    input: SettingsEntityListInput,
+  ) => Promise<Result<SettingsEntityListOutput>>
+  readonly getSettingsEntity: (
+    input: SettingsEntityGetInput,
+  ) => Promise<Result<SettingsEntityGetOutput>>
+  readonly saveSettingsEntity: (
+    input: SettingsEntitySaveInput,
+  ) => Promise<Result<SettingsEntitySaveOutput>>
 }

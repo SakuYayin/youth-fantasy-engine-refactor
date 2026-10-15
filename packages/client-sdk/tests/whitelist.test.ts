@@ -15,7 +15,7 @@ describe('IPC 白名单一致性（防止副本漂移）', () => {
     expect([...CLIENT_METHODS]).toEqual([...preloadMethodsModule.IPC_METHODS])
   })
 
-  it('与 ADR 0006 D2 的六个方法逐字一致，且副本被冻结、无重复', () => {
+  it('与 ADR 0006 D2 的方法表逐字一致（含 W6 追加的设定实体三方法），且副本被冻结、无重复', () => {
     expect([...CLIENT_METHODS]).toEqual([
       'saveDraft',
       'listDocumentTree',
@@ -23,6 +23,9 @@ describe('IPC 白名单一致性（防止副本漂移）', () => {
       'createProject',
       'createDocument',
       'systemStatus',
+      'listSettingsEntities',
+      'getSettingsEntity',
+      'saveSettingsEntity',
     ])
     expect(Object.isFrozen(CLIENT_METHODS)).toBe(true)
     expect(new Set(CLIENT_METHODS).size).toBe(CLIENT_METHODS.length)

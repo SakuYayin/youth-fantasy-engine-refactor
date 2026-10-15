@@ -18,6 +18,9 @@ export const IPC_METHODS = Object.freeze([
   'createProject',
   'createDocument',
   'systemStatus',
+  'listSettingsEntities',
+  'getSettingsEntity',
+  'saveSettingsEntity',
 ] as const)
 
 export type IpcMethod = (typeof IPC_METHODS)[number]

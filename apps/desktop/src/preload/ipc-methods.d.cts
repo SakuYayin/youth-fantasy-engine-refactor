@@ -13,6 +13,9 @@ declare const ipcMethodsModule: {
     'createProject',
     'createDocument',
     'systemStatus',
+    'listSettingsEntities',
+    'getSettingsEntity',
+    'saveSettingsEntity',
   ];
 };
 

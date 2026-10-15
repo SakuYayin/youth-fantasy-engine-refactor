@@ -17,6 +17,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 const IPC_METHODS = Object.freeze([
   'saveDraft', 'listDocumentTree', 'getDocument',
   'createProject', 'createDocument', 'systemStatus',
+  'listSettingsEntities', 'getSettingsEntity', 'saveSettingsEntity',
 ]);
 
 const IPC_CHANNEL = 'yfe:invoke';
