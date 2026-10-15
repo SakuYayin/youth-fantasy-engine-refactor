@@ -26,7 +26,7 @@ import type {
   UtcTimestamp,
   WorkspaceId,
 } from '../ids.js'
-import type { DocumentKind, DocumentSummary, SettingsEntity } from '../entities/index.js'
+import type { DocumentKind, DocumentSummary, Project, SettingsEntity } from '../entities/index.js'
 
 // ---------------------------------------------------------------------------
 // 请求封装：每个命令都带的公共头
@@ -158,6 +158,26 @@ export interface DocumentUpdateInput {
 
 export interface DocumentUpdateOutput {
   readonly revision: Revision
+  /** 只有发生重排时才有值（调用方用它免重拉整棵树）。 */
+  readonly orderKey?: string
+}
+
+/**
+ * 文档软删（默认级联整棵子树）。
+ *
+ * 软删（`deleted` 标记）而不是物理删：回收站视图与同步墓碑都依赖它
+ * （设计文档 07：删除用基线生成墓碑）。级联删除也是「这些实体变了」，
+ * 版本号由存储层逐行推进。
+ */
+export interface DocumentDeleteInput {
+  readonly context: WriteContext
+  readonly documentId: DocumentId
+}
+
+export interface DocumentDeleteOutput {
+  readonly revision: Revision
+  /** 实际软删的条数（级联时含子树）。 */
+  readonly deletedCount: number
 }
 
 // ---------------------------------------------------------------------------
@@ -348,4 +368,111 @@ export interface AiCompleteOutput {
     readonly promptTokens?: number
     readonly completionTokens?: number
   }
+}
+
+// ---------------------------------------------------------------------------
+// 作品列表 / 重命名 / 删除（项目管理页，旧版 ProjectHub 的对应命令）
+// ---------------------------------------------------------------------------
+
+export interface ProjectListInput {
+  readonly context: ReadContext
+}
+
+export interface ProjectListOutput {
+  readonly projects: readonly Project[]
+}
+
+/** 重命名作品。CAS 乐观锁在存储层（`WHERE id AND revision`）。 */
+export interface ProjectUpdateInput {
+  readonly context: WriteContext
+  readonly projectId: ProjectId
+  readonly name: string
+}
+
+export interface ProjectUpdateOutput {
+  readonly projectId: ProjectId
+  readonly revision: Revision
+}
+
+/** 软删作品。🔴 只标记作品行，**不级联**子文档（可见性由作品决定，恢复才可能）；重复删除报 NOT_FOUND_PROJECT。 */
+export interface ProjectDeleteInput {
+  readonly context: WriteContext
+  readonly projectId: ProjectId
+}
+
+export interface ProjectDeleteOutput {
+  readonly projectId: ProjectId
+  readonly revision: Revision
+}
+
+// ---------------------------------------------------------------------------
+// 备份与恢复（桌面本地，旧版 BackupManager 的对应命令）
+// ---------------------------------------------------------------------------
+
+/**
+ * 创建一致备份（`VACUUM INTO` 快照 + 清单，成对写出）。
+ *
+ * 🔴 备份目录由主进程适配器决定（`<数据目录>/backups/`），渲染层**不传任意路径**：
+ * 快照落盘位置是存储细节，也避免渲染层借 IPC 读写任意文件。
+ */
+export interface BackupCreateInput {
+  /** 备份标签（清单与列表展示用），缺省用时间戳。 */
+  readonly label?: string
+}
+
+export interface BackupCreateOutput {
+  readonly backupPath: string
+  readonly manifestPath: string
+  readonly createdAt: UtcTimestamp
+  readonly byteSize: number
+  readonly durationMs: number
+}
+
+export interface BackupFileEntry {
+  readonly backupPath: string
+  readonly manifestPath: string
+  readonly label: string
+  readonly createdAt: UtcTimestamp | null
+  readonly byteSize: number
+}
+
+export interface BackupListOutput {
+  readonly backups: readonly BackupFileEntry[]
+}
+
+export interface BackupVerifyInput {
+  /** 只允许校验备份目录内的文件（防任意文件读取）。 */
+  readonly backupPath: string
+}
+
+export interface BackupVerifyOutput {
+  readonly backupPath: string
+  readonly manifestPath: string
+  readonly label: string
+  readonly createdAt: UtcTimestamp | null
+  readonly integrity: 'ok'
+  readonly databaseSchemaVersion: number
+  /** 快照版本低于程序 ⇒ 需要先迁移才能写。 */
+  readonly needsMigration: boolean
+  readonly byteSize: number
+}
+
+/**
+ * 恢复一份备份。
+ *
+ * 🔴 预览版权衡：恢复**绝不覆盖当前正在使用的库文件**——连接由 db-worker 独占持有，
+ *    覆盖正在使用的文件必然损坏（Windows 文件锁 + WAL）。结果写到
+ *    `<数据目录>/restore-preview/`，切换当前数据文件需要重启应用（后续批次做切换流程）。
+ */
+export interface BackupRestoreInput {
+  readonly backupPath: string
+  /** 目标已存在时是否覆盖。默认 false：覆盖必须是显式决定。 */
+  readonly overwrite?: boolean
+}
+
+export interface BackupRestoreOutput {
+  readonly targetPath: string
+  readonly manifestPath: string
+  readonly byteSize: number
+  readonly verified: boolean
 }

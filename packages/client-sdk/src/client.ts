@@ -14,10 +14,14 @@ import type {
   AiCompleteOutput,
   DocumentCreateInput,
   DocumentCreateOutput,
+  DocumentDeleteInput,
+  DocumentDeleteOutput,
   DocumentGetInput,
   DocumentGetOutput,
   DocumentTreeInput,
   DocumentTreeOutput,
+  DocumentUpdateInput,
+  DocumentUpdateOutput,
   ProjectCreateInput,
   ProjectCreateOutput,
   SaveDraftInput,
@@ -171,6 +175,10 @@ function createRendererClient(invoke: RawInvoke): RendererClient {
       invoke('createProject', input) as Promise<Result<ProjectCreateOutput>>,
     createDocument: (input: DocumentCreateInput) =>
       invoke('createDocument', input) as Promise<Result<DocumentCreateOutput>>,
+    updateDocument: (input: DocumentUpdateInput) =>
+      invoke('updateDocument', input) as Promise<Result<DocumentUpdateOutput>>,
+    deleteDocument: (input: DocumentDeleteInput) =>
+      invoke('deleteDocument', input) as Promise<Result<DocumentDeleteOutput>>,
     systemStatus: () => invoke('systemStatus', null) as Promise<Result<SystemStatusOutput>>,
     listSettingsEntities: (input: SettingsEntityListInput) =>
       invoke('listSettingsEntities', input) as Promise<Result<SettingsEntityListOutput>>,

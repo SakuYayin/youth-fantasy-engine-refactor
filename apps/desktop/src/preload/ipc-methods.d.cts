@@ -12,6 +12,8 @@ declare const ipcMethodsModule: {
     'getDocument',
     'createProject',
     'createDocument',
+    'updateDocument',
+    'deleteDocument',
     'systemStatus',
     'listSettingsEntities',
     'getSettingsEntity',

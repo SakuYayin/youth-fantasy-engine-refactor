@@ -52,9 +52,14 @@ export interface FakeCounts {
   loadDocument: number
   commitDraft: number
   createProject: number
+  listProjects: number
+  updateProject: number
+  deleteProject: number
   createDocument: number
   getDocument: number
   listDocumentTree: number
+  updateDocument: number
+  deleteDocument: number
   listSettingsEntities: number
   getSettingsEntity: number
   saveSettingsEntity: number
@@ -66,9 +71,14 @@ export interface ThrowConfig {
   loadDocument?: unknown
   commitDraft?: unknown
   createProject?: unknown
+  listProjects?: unknown
+  updateProject?: unknown
+  deleteProject?: unknown
   createDocument?: unknown
   getDocument?: unknown
   listDocumentTree?: unknown
+  updateDocument?: unknown
+  deleteDocument?: unknown
   listSettingsEntities?: unknown
   getSettingsEntity?: unknown
   saveSettingsEntity?: unknown
@@ -119,7 +129,16 @@ export interface FakeHarness {
   ports: ApplicationPorts
   readonly counts: FakeCounts
   readonly documents: Map<string, FakeDocument>
-  readonly projects: Map<string, { readonly name: string; readonly projectId: string }>
+  readonly projects: Map<
+    string,
+    {
+      readonly name: string
+      readonly projectId: string
+      readonly workspaceId: string
+      deleted: 0 | 1
+      revisionSeq: number
+    }
+  >
   readonly settingsEntities: Map<string, FakeSettingsEntity>
   readonly commits: CommitDraftRequest[]
   readonly watermarks: Map<string, number>
@@ -283,9 +302,14 @@ export function createFakeHarness(options: FakeOptions = {}): FakeHarness {
     loadDocument: 0,
     commitDraft: 0,
     createProject: 0,
+    listProjects: 0,
+    updateProject: 0,
+    deleteProject: 0,
     createDocument: 0,
     getDocument: 0,
     listDocumentTree: 0,
+    updateDocument: 0,
+    deleteDocument: 0,
     listSettingsEntities: 0,
     getSettingsEntity: 0,
     saveSettingsEntity: 0,
@@ -373,8 +397,74 @@ export function createFakeHarness(options: FakeOptions = {}): FakeHarness {
         counts.createProject += 1
         harness.lastCreateProject = request
         maybeThrow(harness.throwOn.createProject)
-        harness.projects.set(request.projectId, { name: request.name, projectId: request.projectId })
+        harness.projects.set(request.projectId, {
+          name: request.name,
+          projectId: request.projectId,
+          workspaceId: request.context.workspaceId,
+          deleted: 0,
+          revisionSeq: 1,
+        })
         return Promise.resolve(ok({ revision: encodeRevision(1) }))
+      },
+      listProjects: (request) => {
+        counts.listProjects += 1
+        maybeThrow(harness.throwOn.listProjects)
+        const rows = [...harness.projects.values()].filter(
+          (project) => project.workspaceId === request.context.workspaceId && project.deleted === 0,
+        )
+        return Promise.resolve(
+          ok(
+            rows.map((project) => ({
+              id: project.projectId,
+              name: project.name,
+              summary: '',
+              projectType: 'full',
+              workspaceId: project.workspaceId,
+              revision: encodeRevision(project.revisionSeq),
+              deleted: project.deleted,
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+              authorityTargetId: null,
+            })),
+          ),
+        )
+      },
+      updateProject: (request) => {
+        counts.updateProject += 1
+        maybeThrow(harness.throwOn.updateProject)
+        const project = harness.projects.get(request.projectId)
+        if (project === undefined || project.workspaceId !== request.context.workspaceId) {
+          return Promise.resolve(
+            errOf('NOT_FOUND_PROJECT', '作品不存在', request.context.requestId, { entityId: request.projectId }),
+          )
+        }
+        if (project.deleted !== 0) {
+          return Promise.resolve(
+            errOf('NOT_FOUND_PROJECT', '作品已删除', request.context.requestId, { entityId: request.projectId }),
+          )
+        }
+        ;(project as { name: string }).name = request.name
+        project.revisionSeq += 1
+        return Promise.resolve(ok({ revision: encodeRevision(project.revisionSeq) }))
+      },
+      deleteProject: (request) => {
+        counts.deleteProject += 1
+        maybeThrow(harness.throwOn.deleteProject)
+        const project = harness.projects.get(request.projectId)
+        if (project === undefined || project.workspaceId !== request.context.workspaceId) {
+          return Promise.resolve(
+            errOf('NOT_FOUND_PROJECT', '作品不存在', request.context.requestId, { entityId: request.projectId }),
+          )
+        }
+        if (project.deleted !== 0) {
+          // 与真实存储层一致：重复删除报 NOT_FOUND_PROJECT（软删不级联子文档）
+          return Promise.resolve(
+            errOf('NOT_FOUND_PROJECT', '作品已删除', request.context.requestId, { entityId: request.projectId }),
+          )
+        }
+        project.deleted = 1
+        project.revisionSeq += 1
+        return Promise.resolve(ok({ revision: encodeRevision(project.revisionSeq) }))
       },
     },
     documents: {
@@ -428,6 +518,79 @@ export function createFakeHarness(options: FakeOptions = {}): FakeHarness {
           .filter((document) => request.includeDeleted || document.deleted === 0)
           .map((document) => summaryOf(document))
         return Promise.resolve(ok(list))
+      },
+      updateDocument: (request) => {
+        counts.updateDocument += 1
+        maybeThrow(harness.throwOn.updateDocument)
+        const document = documents.get(request.documentId)
+        if (document === undefined || document.deleted !== 0) {
+          return Promise.resolve(
+            errOf('NOT_FOUND_DOCUMENT', '文档不存在或已被删除', request.context.requestId, {
+              field: 'documentId',
+            }),
+          )
+        }
+        const nextSeq = document.revisionSeq + 1
+        const next: FakeDocument = {
+          ...document,
+          title: request.title ?? document.title,
+          // fake 只需要「确定性地换一个键」：真实 orderKey 生成是存储层义务。
+          orderKey:
+            request.placement === undefined ? document.orderKey : `zz-${document.orderKey}`,
+          revisionSeq: nextSeq,
+          revision: encodeRevision(nextSeq),
+        }
+        documents.set(request.documentId, next)
+        return Promise.resolve(
+          ok({
+            revision: next.revision,
+            ...(request.placement === undefined ? {} : { orderKey: next.orderKey }),
+          }),
+        )
+      },
+      deleteDocument: (request) => {
+        counts.deleteDocument += 1
+        maybeThrow(harness.throwOn.deleteDocument)
+        const self = documents.get(request.documentId)
+        if (self === undefined) {
+          return Promise.resolve(
+            errOf('NOT_FOUND_DOCUMENT', '文档不存在', request.context.requestId, {
+              field: 'documentId',
+            }),
+          )
+        }
+        // 级联 = 沿 parentId 链找全部后代（fake 版：直接遍历全表向上回溯）。
+        const descendants = new Set<string>([request.documentId])
+        let grew = true
+        while (grew) {
+          grew = false
+          for (const document of documents.values()) {
+            if (
+              document.parentId !== null &&
+              descendants.has(document.parentId) &&
+              !descendants.has(document.documentId)
+            ) {
+              descendants.add(document.documentId)
+              grew = true
+            }
+          }
+        }
+        let deletedCount = 0
+        for (const [id, document] of documents) {
+          if (descendants.has(id) && document.deleted === 0) {
+            deletedCount += 1
+            const nextSeq = document.revisionSeq + 1
+            documents.set(id, {
+              ...document,
+              deleted: 1 as DeletedFlag,
+              revisionSeq: nextSeq,
+              revision: encodeRevision(nextSeq),
+            })
+          }
+        }
+        return Promise.resolve(
+          ok({ revision: encodeRevision(self.revisionSeq + 1), deletedCount }),
+        )
       },
     },
     settingsEntities: {

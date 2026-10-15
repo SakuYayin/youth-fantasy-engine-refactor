@@ -32,6 +32,7 @@ import {
   type DocumentSummary,
   type IdempotencyKey,
   type ProjectId,
+  type Project,
   type RandomSource,
   type ReadContext,
   type Result,
@@ -233,6 +234,36 @@ export interface ProjectWriteResult {
 export interface ProjectPort {
   /** 建作品；`seedFirstChapter === true` 时同一事务内建首章（由适配器决定结构）。 */
   createProject(request: CreateProjectRequest): Promise<Result<ProjectWriteResult>>
+  /** 列出工作区内的作品（适配器按 `context.workspaceId` 过滤；`deleted === 0` 的行）。 */
+  listProjects(request: ListProjectsRequest): Promise<Result<readonly Project[]>>
+  /** 重命名作品（CAS 乐观锁在适配器）。 */
+  updateProject(request: UpdateProjectRequest): Promise<Result<ProjectWriteResult>>
+  /** 软删作品（级联子文档；适配器返回实际标记删除的行数）。 */
+  deleteProject(request: DeleteProjectRequest): Promise<Result<ProjectDeleteResult>>
+}
+
+export interface ListProjectsRequest {
+  readonly context: ReadContext
+  /** 用例已归一为布尔值（契约里是可选字段）。 */
+  readonly includeDeleted: boolean
+}
+
+export interface UpdateProjectRequest {
+  readonly context: WriteContext
+  readonly projectId: ProjectId
+  readonly name: string
+  readonly occurredAt: UtcTimestamp
+}
+
+export interface DeleteProjectRequest {
+  readonly context: WriteContext
+  readonly projectId: ProjectId
+  readonly occurredAt: UtcTimestamp
+}
+
+export interface ProjectDeleteResult {
+  readonly revision: Revision
+  readonly deletedCount: number
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +299,31 @@ export interface ListDocumentTreeRequest {
   readonly includeDeleted: boolean
 }
 
+export interface UpdateDocumentRequest {
+  readonly context: WriteContext
+  readonly documentId: DocumentId
+  /** 重命名：不给就不改标题。 */
+  readonly title?: string
+  /** 重排：不给就不动位置。 */
+  readonly placement?: { readonly mode: 'end' } | { readonly mode: 'after'; readonly afterId: DocumentId }
+}
+
+export interface UpdateDocumentResult {
+  readonly revision: Revision
+  /** 只有发生重排时才有值；调用方用它免重拉整棵树。 */
+  readonly orderKey?: string
+}
+
+export interface DeleteDocumentRequest {
+  readonly context: WriteContext
+  readonly documentId: DocumentId
+}
+
+export interface DeleteDocumentResult {
+  readonly revision: Revision
+  readonly deletedCount: number
+}
+
 export interface DocumentPort {
   /**
    * 建文档。
@@ -286,6 +342,14 @@ export interface DocumentPort {
   getDocument(request: GetDocumentRequest): Promise<Result<DocumentGetOutput>>
   /** 平铺返回文档树，**不含正文**；必须按 `context.workspaceId` 过滤。 */
   listDocumentTree(request: ListDocumentTreeRequest): Promise<Result<readonly DocumentSummary[]>>
+  /**
+   * 重命名与/或重排。两者同时给时适配器按「先改名、后重排」顺序执行；
+   * `expectedRevision` 乐观锁与工作区归属由存储层复查（`loadDocumentForWrite`）。
+   * 重排时必须回传新 `orderKey`（调用方用它免重拉整棵树）。
+   */
+  updateDocument(request: UpdateDocumentRequest): Promise<Result<UpdateDocumentResult>>
+  /** 级联软删子树（`cascade` 默认 true）；返回墓碑 revision 与实际删除条数。 */
+  deleteDocument(request: DeleteDocumentRequest): Promise<Result<DeleteDocumentResult>>
 }
 
 // ---------------------------------------------------------------------------

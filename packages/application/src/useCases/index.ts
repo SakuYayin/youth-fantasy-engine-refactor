@@ -7,8 +7,13 @@
 
 export * from './saveDraft.js'
 export * from './createProject.js'
+export * from './listProjects.js'
+export * from './updateProject.js'
+export * from './deleteProject.js'
 export * from './createDocument.js'
 export * from './getDocument.js'
+export * from './updateDocument.js'
+export * from './deleteDocument.js'
 export * from './listDocumentTree.js'
 export * from './listSettingsEntities.js'
 export * from './getSettingsEntity.js'

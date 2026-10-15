@@ -17,6 +17,8 @@ const IPC_METHODS = Object.freeze([
   'getDocument',
   'createProject',
   'createDocument',
+  'updateDocument',
+  'deleteDocument',
   'systemStatus',
   'listSettingsEntities',
   'getSettingsEntity',

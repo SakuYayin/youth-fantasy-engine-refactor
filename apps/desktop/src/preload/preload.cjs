@@ -16,7 +16,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 // 与 TS/CJS 权威副本的一致性由受限 require 环境下的执行测试保证。
 const IPC_METHODS = Object.freeze([
   'saveDraft', 'listDocumentTree', 'getDocument',
-  'createProject', 'createDocument', 'systemStatus',
+  'createProject', 'createDocument', 'updateDocument', 'deleteDocument',
+  'systemStatus',
   'listSettingsEntities', 'getSettingsEntity', 'saveSettingsEntity',
   'aiComplete',
 ]);

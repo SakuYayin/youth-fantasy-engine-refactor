@@ -11,10 +11,14 @@
 import type {
   DocumentCreateInput,
   DocumentCreateOutput,
+  DocumentDeleteInput,
+  DocumentDeleteOutput,
   DocumentGetInput,
   DocumentGetOutput,
   DocumentTreeInput,
   DocumentTreeOutput,
+  DocumentUpdateInput,
+  DocumentUpdateOutput,
   AiCompleteInput,
   AiCompleteOutput,
   ProjectCreateInput,
@@ -64,6 +68,8 @@ export interface ClientContract {
   readonly getDocument: { readonly input: DocumentGetInput; readonly output: DocumentGetOutput }
   readonly createProject: { readonly input: ProjectCreateInput; readonly output: ProjectCreateOutput }
   readonly createDocument: { readonly input: DocumentCreateInput; readonly output: DocumentCreateOutput }
+  readonly updateDocument: { readonly input: DocumentUpdateInput; readonly output: DocumentUpdateOutput }
+  readonly deleteDocument: { readonly input: DocumentDeleteInput; readonly output: DocumentDeleteOutput }
   readonly systemStatus: { readonly input: null; readonly output: SystemStatusOutput }
   readonly listSettingsEntities: {
     readonly input: SettingsEntityListInput
@@ -95,6 +101,8 @@ export interface RendererClient {
   readonly getDocument: (input: DocumentGetInput) => Promise<Result<DocumentGetOutput>>
   readonly createProject: (input: ProjectCreateInput) => Promise<Result<ProjectCreateOutput>>
   readonly createDocument: (input: DocumentCreateInput) => Promise<Result<DocumentCreateOutput>>
+  readonly updateDocument: (input: DocumentUpdateInput) => Promise<Result<DocumentUpdateOutput>>
+  readonly deleteDocument: (input: DocumentDeleteInput) => Promise<Result<DocumentDeleteOutput>>
   readonly systemStatus: () => Promise<Result<SystemStatusOutput>>
   readonly listSettingsEntities: (
     input: SettingsEntityListInput,

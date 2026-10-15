@@ -61,6 +61,9 @@ import {
   listDocumentTree as readDocumentTree,
   listSettingsEntities as readSettingsEntities,
   listSettingsEntitiesInWorkspace as readSettingsEntitiesInWorkspace,
+  reorderDocument,
+  softDeleteDocument,
+  updateDocumentTitle,
   updateSettingsEntity,
 } from '@yfe/persistence-sqlite/repositories';
 
@@ -304,6 +307,58 @@ export function createSqliteApplicationPorts({ db, ids, revisions, describeDatab
           return ok(listed.value.documents);
         } catch (thrown) {
           return errorResult(thrown, requestId, '读取文档树失败');
+        }
+      },
+
+      /**
+       * 重命名与/或重排。两个可选字段同时给时按「先改名、后重排」顺序执行——
+       * 两步各自在自己的事务里（预览版权衡：改名的写入先落地，重排失败时
+       * 标题已改但位置没动，调用方拿到的错误码是重排那一步的）。
+       * 重排必须回传新 orderKey（调用方用它免重拉整棵树）。
+       */
+      async updateDocument(request) {
+        const requestId = request?.context?.requestId;
+        try {
+          const deps = {
+            clock: { now: () => new Date().toISOString() },
+            rng: cryptoRandomSource,
+            revisionGenerator: revisions,
+          };
+          let revision = null;
+          if (request.title !== undefined) {
+            const renamed = updateDocumentTitle(db, request.context, request.documentId, request.title, deps);
+            if (!renamed.ok) return renamed;
+            revision = renamed.value.revision;
+          }
+          if (request.placement !== undefined) {
+            const moved = reorderDocument(db, request.context, request.documentId, request.placement, deps);
+            if (!moved.ok) return moved;
+            revision = moved.value.revision;
+            return ok({ revision, orderKey: moved.value.orderKey });
+          }
+          return ok({ revision });
+        } catch (thrown) {
+          return errorResult(thrown, requestId, '更新文档失败');
+        }
+      },
+
+      /** 级联软删子树（cascade 默认 true）；返回墓碑 revision 与实际删除条数。 */
+      async deleteDocument(request) {
+        const requestId = request?.context?.requestId;
+        try {
+          const deps = {
+            clock: { now: () => new Date().toISOString() },
+            rng: cryptoRandomSource,
+            revisionGenerator: revisions,
+          };
+          const deleted = softDeleteDocument(db, request.context, request.documentId, deps);
+          if (!deleted.ok) return deleted;
+          return ok({
+            revision: deleted.value.revision,
+            deletedCount: deleted.value.deletedCount,
+          });
+        } catch (thrown) {
+          return errorResult(thrown, requestId, '删除文档失败');
         }
       },
     },

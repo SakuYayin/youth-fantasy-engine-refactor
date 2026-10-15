@@ -2,8 +2,10 @@ import type {
   AiCompleteInput,
   AiCompleteOutput,
   DocumentCreateInput,
+  DocumentDeleteInput,
   DocumentGetInput,
   DocumentTreeInput,
+  DocumentUpdateInput,
   ProjectCreateInput,
   SaveDraftInput,
   SettingsEntityGetInput,
@@ -24,6 +26,8 @@ export const IPC_METHODS = [
   'getDocument',
   'createProject',
   'createDocument',
+  'updateDocument',
+  'deleteDocument',
   'systemStatus',
   'listSettingsEntities',
   'getSettingsEntity',
@@ -41,6 +45,8 @@ export interface IpcRequestMap {
   getDocument: DocumentGetInput;
   createProject: ProjectCreateInput;
   createDocument: DocumentCreateInput;
+  updateDocument: DocumentUpdateInput;
+  deleteDocument: DocumentDeleteInput;
   systemStatus: null;
   listSettingsEntities: SettingsEntityListInput;
   getSettingsEntity: SettingsEntityGetInput;
@@ -55,6 +61,8 @@ export interface IpcResponseMap {
   getDocument: unknown;
   createProject: unknown;
   createDocument: unknown;
+  updateDocument: unknown;
+  deleteDocument: unknown;
   systemStatus: SystemStatusOutput;
   listSettingsEntities: unknown;
   getSettingsEntity: unknown;

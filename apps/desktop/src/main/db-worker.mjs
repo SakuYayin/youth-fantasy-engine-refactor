@@ -98,6 +98,8 @@ const {
   createProject: createProjectUseCase,
   createDocument: createDocumentUseCase,
   getDocument: getDocumentUseCase,
+  updateDocument: updateDocumentUseCase,
+  deleteDocument: deleteDocumentUseCase,
   listDocumentTree: listDocumentTreeUseCase,
   listSettingsEntities: listSettingsEntitiesUseCase,
   getSettingsEntity: getSettingsEntityUseCase,
@@ -247,6 +249,10 @@ const DISPATCH = {
   getDocument: (payload, requestId) => withApplication(requestId, (deps) => getDocumentUseCase(deps, payload)),
   createProject: (payload, requestId) => withApplication(requestId, (deps) => createProjectUseCase(deps, payload)),
   createDocument: (payload, requestId) => withApplication(requestId, (deps) => createDocumentUseCase(deps, payload)),
+  updateDocument: (payload, requestId) =>
+    withApplication(requestId, (deps) => updateDocumentUseCase(deps, payload)),
+  deleteDocument: (payload, requestId) =>
+    withApplication(requestId, (deps) => deleteDocumentUseCase(deps, payload)),
   listSettingsEntities: (payload, requestId) =>
     withApplication(requestId, (deps) => listSettingsEntitiesUseCase(deps, payload)),
   getSettingsEntity: (payload, requestId) =>
@@ -258,6 +264,8 @@ const WRITE_METHODS = new Set([
   'saveDraft',
   'createProject',
   'createDocument',
+  'updateDocument',
+  'deleteDocument',
   'saveSettingsEntity',
 ]);
 
