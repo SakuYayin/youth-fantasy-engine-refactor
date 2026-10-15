@@ -264,6 +264,16 @@ export function loadServerConfig(
     }
   }
 
+  if (cookieSecure && publicUrl !== null && publicUrl.startsWith('http://')) {
+    // 这个组合的症状极难自查：浏览器**照收** Set-Cookie 的响应，但之后不再回传
+    // Secure Cookie，于是用户表现成"登录成功却仍是未登录"，日志里一切正常。
+    // 因此必须在启动时就把它说清楚，而不是等用户来报"登录没反应"。
+    warnings.push(
+      `YFE_PUBLIC_URL 是 http 而 YFE_COOKIE_SECURE=true：浏览器不会回传 Secure Cookie，` +
+        `登录会表现为"成功后仍是未登录"。请在前置层启用 HTTPS，或在仅私网 http 访问时显式设置 YFE_COOKIE_SECURE=false。`,
+    )
+  }
+
   return {
     listenHost,
     listenPort,

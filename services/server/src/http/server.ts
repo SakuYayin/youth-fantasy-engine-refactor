@@ -39,6 +39,7 @@ import { migrateServerDatabase } from '../db/migrator.js'
 import { closeServerDatabase, openServerDatabase } from '../db/open.js'
 import type { ServerDb } from '../db/open.js'
 import { registerRoutes } from '../routes/index.js'
+import { storageRootFromDataDir } from '../storage/paths.js'
 import { assertWritableDirectory, loadServerConfig } from './config.js'
 import type { ServerConfig } from './config.js'
 import {
@@ -64,6 +65,27 @@ export interface CreateServerOptions {
   readonly lifecycle?: ServerLifecycle
   /** `false` 关闭日志（测试用）。默认按 `config.logLevel` 输出 JSON。 */
   readonly logger?: boolean
+  /**
+   * 是否装配业务路由表（`routes/index.ts`）。默认 `true`。
+   *
+   * `false` 用于"只想要传输层骨架"的测试：它们自己装配某一个路由模块，
+   * 并注入只有测试才知道的依赖。若在已装配全表的 app 上再注册同一 method+url，
+   * Fastify 会直接抛 `FST_ERR_ROUTE_ALREADY_DECLARED`——那时的报错很难指向真正的原因。
+   *
+   * ⚠️ 绝大多数测试**不需要**它：要换附件存储根或配对 pepper，用下面两个字段，
+   * 这样测的才是真正装配好的 app。关掉全表意味着 `login` 等路由也不存在了。
+   */
+  readonly includeRoutes?: boolean
+  /**
+   * 覆盖附件存储根（默认 `storageRootFromDataDir(config.dataDir)`）。
+   *
+   * 测试必须覆盖它，否则上传会在**仓库工作目录**下写出 `data/assets`。
+   */
+  readonly storageRoot?: string
+  /**
+   * 直接注入配对 pepper（≥16 字节）。优先于 `config.masterKeyFile`，测试用。
+   */
+  readonly pairingPepper?: Buffer | Uint8Array
   readonly rateLimiters?: {
     readonly setup?: RateLimiter
     readonly login?: RateLimiter
@@ -240,20 +262,28 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
   })
 
   // --- 6. 业务路由 ---
-  registerRoutes(app, {
-    db,
-    serverId,
-    policy: config.sessionPolicy,
-    now: () => clock.now(),
-    startedAt: startedAtIso,
-    startedAtMs: startedAtMs,
-    nowMs: () => Date.now(),
-    bootstrapSecretFile: config.bootstrapSecretFile,
-    bodyLimitBytes: config.bodyLimitBytes,
-    guards,
-    log: makeLogSink(app),
-    ...(options.rateLimiters === undefined ? {} : { rateLimiters: options.rateLimiters }),
-  })
+  // `includeRoutes: false` 只用于"自己装配某个路由模块"的测试，见 CreateServerOptions。
+  if (options.includeRoutes !== false) {
+    registerRoutes(app, {
+      db,
+      serverId,
+      policy: config.sessionPolicy,
+      now: () => clock.now(),
+      startedAt: startedAtIso,
+      startedAtMs: startedAtMs,
+      nowMs: () => Date.now(),
+      bootstrapSecretFile: config.bootstrapSecretFile,
+      // 附件存储根：路由不读 env，唯一来源是配置（测试可覆盖成临时目录）。
+      storageRoot: options.storageRoot ?? storageRootFromDataDir(config.dataDir),
+      // 配对码 pepper 的来源；为 null 时配对码接口 fail closed（503）。
+      masterKeyFile: config.masterKeyFile,
+      ...(options.pairingPepper === undefined ? {} : { pairingPepper: options.pairingPepper }),
+      bodyLimitBytes: config.bodyLimitBytes,
+      guards,
+      log: makeLogSink(app),
+      ...(options.rateLimiters === undefined ? {} : { rateLimiters: options.rateLimiters }),
+    })
+  }
 
   return app
 }

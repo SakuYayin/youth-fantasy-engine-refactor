@@ -11,7 +11,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { DEFAULT_BODY_LIMIT_BYTES } from '../src/http/config.js'
-import { SYNC_LIMITS, SUPPORTED_COMMANDS } from '../src/sync/protocol.js'
+import { SYNC_ASSETS, SYNC_LIMITS, SUPPORTED_COMMANDS } from '../src/sync/protocol.js'
 import { seedOwner } from './helpers.js'
 import { harnessTracker, loginAs } from './syncHelpers.js'
 
@@ -87,14 +87,16 @@ describe('GET /api/v1/capabilities', () => {
     expect(body.commands).toEqual([...SUPPORTED_COMMANDS])
     // 附件上传是本轮之后的交付：必须**如实说 false**，而不是留一个乐观的 true。
     expect(body.assets.enabled).toBe(false)
-    expect(body.assets.partSizeBytes).toBeGreaterThan(0)
+    // 分片上限默认被传输层 4 MiB bodyLimit 夹住：报 8 MiB 会让客户端必吃 413（R-41）。
+    expect(body.assets.partSizeBytes).toBe(Math.min(SYNC_ASSETS.partSizeBytes, DEFAULT_BODY_LIMIT_BYTES))
     expect(body.readOnly).toBe(false)
   })
 
-  it('运维调小请求体上限后，上报的 maxBatchBytes 同步收窄', async () => {
+  it('运维调小请求体上限后，上报的 maxBatchBytes 与分片上限同步收窄', async () => {
     const { app, headers } = await authorizedHarness({ bodyLimitBytes: 1024 })
     const body = (await app.inject({ method: 'GET', url: CAPABILITIES_URL, headers })).json<CapabilitiesBody>()
     expect(body.limits.maxBatchBytes).toBe(1024)
+    expect(body.assets.partSizeBytes).toBe(1024)
   })
 
   it('响应体不含内部路径、数据目录、密钥文件或监听参数', async () => {

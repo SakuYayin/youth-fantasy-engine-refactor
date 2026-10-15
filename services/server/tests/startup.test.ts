@@ -121,6 +121,25 @@ describe('配置装载（环境变量契约）', () => {
     expect(loadServerConfig({ YFE_COOKIE_SECURE: 'TRUE' }, cwd).sessionPolicy.cookieSecure).toBe(true)
   })
 
+  it('http 公网地址 + Secure Cookie 必须给出启动警告（否则症状是"登录成功却仍未登录"）', () => {
+    const cwd = makeTempDir()
+    // 默认 cookieSecure=true（config.ts:235），而 YFE_PUBLIC_URL 是 http ⇒ 浏览器
+    // 不会回传 Secure Cookie。日志里一切正常，只有用户看到"登录没反应"。
+    const warned = loadServerConfig({ YFE_PUBLIC_URL: 'http://nas.local:8787' }, cwd)
+    expect(warned.warnings.join(' ')).toContain('YFE_COOKIE_SECURE=false')
+
+    // HTTPS 下没有任何警告：Secure Cookie 与地址匹配。
+    expect(loadServerConfig({ YFE_PUBLIC_URL: 'https://nas.local' }, cwd).warnings).toEqual([])
+
+    // 显式降级（仅私网 http）也不该再报警：运维已经做过选择。
+    expect(
+      loadServerConfig(
+        { YFE_PUBLIC_URL: 'http://nas.local:8787', YFE_COOKIE_SECURE: 'false' },
+        cwd,
+      ).warnings,
+    ).toEqual([])
+  })
+
   it('YFE_DATABASE_PATH 覆盖数据目录推断值', () => {
     const cwd = makeTempDir()
     const config = loadServerConfig(

@@ -89,6 +89,66 @@ export type { WorkspaceRouteDeps } from './routes/workspaces.js'
 export { registerSyncRoutes } from './routes/sync.js'
 export type { SyncRouteDeps } from './routes/sync.js'
 
+// --- P3-C1 附件上传与资产 ---
+export { registerUploadRoutes } from './routes/uploads.js'
+export type { UploadRouteDeps } from './routes/uploads.js'
+export { registerAssetRoutes } from './routes/assets.js'
+export type { AssetRouteDeps } from './routes/assets.js'
+export {
+  ASSEMBLED_FILE_NAME,
+  StorageIntegrityError,
+  createAssetStorage,
+  ensureStorageRoot,
+  removeObjectFile,
+  toStorageContractError,
+} from './storage/index.js'
+export type {
+  AssembledObject,
+  AssetStorage,
+  CommittedObject,
+  StorageLocation,
+  StoredPartFile,
+} from './storage/index.js'
+export {
+  CONTENT_ADDRESS_ALGORITHM,
+  MAX_PART_NUMBER,
+  StoragePathError,
+  assertStorageRoot,
+  isWithinRoot,
+  resolveUnderRoot,
+  storageRootFromDataDir,
+} from './storage/paths.js'
+export type { StoragePathViolation } from './storage/paths.js'
+
+// --- P3-C2 任务队列与事件流 ---
+export { registerJobRoutes } from './routes/jobs.js'
+export type { JobRouteDeps } from './routes/jobs.js'
+export { registerJobEventRoutes } from './routes/events.js'
+export { createJobRunner } from './queue/index.js'
+export type {
+  JobExecutor,
+  JobExecutorContext,
+  JobRunner,
+  JobRunnerOptions,
+  RunnerOutcome,
+} from './queue/index.js'
+
+// --- P3-C3 设备令牌入口与远程命令 ---
+export { registerDeviceRoutes } from './routes/devices.js'
+export type { DeviceRouteDeps } from './routes/devices.js'
+export { registerCommandRoutes } from './routes/commands.js'
+export type { CommandRouteDeps } from './routes/commands.js'
+export { registerPairingCodeRoutes, resolvePairingPepper } from './routes/pairingCodes.js'
+export type { PairingCodeRouteDeps, PairingSecretSource } from './routes/pairingCodes.js'
+export {
+  createDeviceGuards,
+  currentDeviceAuth,
+  makeRequireDevice,
+  peekDeviceAuth,
+  requireDeviceWorkspace,
+} from './permission/deviceAuth.js'
+export type { DeviceAuthContext, DeviceGuards, DevicePreHandler } from './permission/deviceAuth.js'
+
 export {
   CONFIG_ENTITY_TYPE,
   DEFAULT_CHANGES_LIMIT,
@@ -118,3 +178,6 @@ export type { SyncEntityType } from './sync/protocol.js'
 
 export { registerRoutes } from './routes/index.js'
 export type { RouteDeps } from './routes/index.js'
+
+export { parseServerArgs, resolveCliConfig, runServerCli, serverCliUsage } from './cli.js'
+export type { ParsedServerArgs, RunServerCliDeps, ServerCliIo, ServerCliOptions } from './cli.js'

@@ -23,6 +23,15 @@
  * `authorizeWorkspaceAccess(deps, request, workspaceId, action)`
  * （理由见 `permission/index.ts` 的文件头）。"在处理器里自己解析 token 然后信它"
  * 是明确禁止的写法。
+ *
+ * ## 装配方必须注入的两个"环境事实"
+ *
+ * `RouteDeps` 里有两个字段**故意不设默认值**，因为它们的正确取值只有配置层知道：
+ *
+ * 1. `storageRoot`：附件存储根（`storageRootFromDataDir(config.dataDir)`）。
+ *    路由不读 `process.env`，测试才能把它换成临时目录。
+ * 2. `masterKeyFile`：配对码 pepper 的来源。为 `null` 时配对码接口会
+ *    **fail closed 返回 503**（`pairing_pepper_missing`），而不是退化成无盐哈希。
  */
 
 import type { UtcTimestamp } from '@yfe/contracts'
@@ -33,10 +42,17 @@ import type { ServerDb } from '../db/open.js'
 import { registerHealthRoutes } from '../http/health.js'
 import type { RateLimiter } from '../http/rateLimit.js'
 import type { PermissionGuards } from '../permission/index.js'
+import { registerAssetRoutes } from './assets.js'
 import { registerAuthRoutes } from './auth.js'
 import { registerCapabilitiesRoute } from './capabilities.js'
+import { registerCommandRoutes } from './commands.js'
+import { registerDeviceRoutes } from './devices.js'
+import { registerJobEventRoutes } from './events.js'
+import { registerJobRoutes } from './jobs.js'
+import { registerPairingCodeRoutes } from './pairingCodes.js'
 import { registerSetupRoute } from './setup.js'
 import { registerSyncRoutes } from './sync.js'
+import { registerUploadRoutes } from './uploads.js'
 import { registerWorkspaceRoutes } from './workspaces.js'
 
 export interface RouteDeps {
@@ -48,6 +64,19 @@ export interface RouteDeps {
   readonly startedAtMs: number
   readonly nowMs: () => number
   readonly bootstrapSecretFile: string | null
+  /**
+   * 附件存储根（绝对路径）。见文件头"装配方必须注入的两个环境事实"。
+   */
+  readonly storageRoot: string
+  /**
+   * 主密钥文件路径（32 字节 Base64），配对码 pepper 的来源；`null` ⇒ 配对码接口 503。
+   */
+  readonly masterKeyFile: string | null
+  /**
+   * 直接注入的配对 pepper（≥16 字节）。仅测试与嵌入方使用：它优先于
+   * `masterKeyFile`（见 `resolvePairingPepper`），让测试不必造 32 字节密钥文件。
+   */
+  readonly pairingPepper?: Buffer | Uint8Array
   /**
    * 传输层请求体上限（来自 `config.bodyLimitBytes`）。
    *
@@ -115,6 +144,82 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     now: deps.now,
     guards: deps.guards,
     bodyLimitBytes: deps.bodyLimitBytes,
+    ...(deps.log === undefined ? {} : { log: deps.log }),
+  })
+
+  // 附件：分片上传会话 → 校验 → 资产登记 → 引用索引。
+  // `storageRoot` 由配置注入（本文件的 RouteDeps 已写明理由）。
+  registerUploadRoutes(app, {
+    db: deps.db,
+    policy: deps.policy,
+    now: deps.now,
+    guards: deps.guards,
+    storageRoot: deps.storageRoot,
+    bodyLimitBytes: deps.bodyLimitBytes,
+    ...(deps.log === undefined ? {} : { log: deps.log }),
+  })
+
+  // 资产：下载已校验对象 + 查询引用（`AssetRouteDeps` 就是 `UploadRouteDeps` 的别名）。
+  registerAssetRoutes(app, {
+    db: deps.db,
+    policy: deps.policy,
+    now: deps.now,
+    guards: deps.guards,
+    storageRoot: deps.storageRoot,
+    bodyLimitBytes: deps.bodyLimitBytes,
+    ...(deps.log === undefined ? {} : { log: deps.log }),
+  })
+
+  // 任务：提交 / 列举 / 详情 / 取消（提交进队列，执行由注入的执行器完成）。
+  registerJobRoutes(app, {
+    db: deps.db,
+    policy: deps.policy,
+    now: deps.now,
+    guards: deps.guards,
+    bodyLimitBytes: deps.bodyLimitBytes,
+    ...(deps.log === undefined ? {} : { log: deps.log }),
+  })
+
+  // 任务事件流（SSE）：按 jobId 订阅输出与状态，支持断点续读。
+  registerJobEventRoutes(app, {
+    db: deps.db,
+    policy: deps.policy,
+    now: deps.now,
+    guards: deps.guards,
+    bodyLimitBytes: deps.bodyLimitBytes,
+    ...(deps.log === undefined ? {} : { log: deps.log }),
+  })
+
+  // 设备：列表 / 重命名 / 撤销 / 换凭据（`POST /api/v1/devices/pair`）。
+  registerDeviceRoutes(app, {
+    db: deps.db,
+    policy: deps.policy,
+    now: deps.now,
+    guards: deps.guards,
+    // 设备侧路由用设备令牌鉴权（`makeRequireDevice`），不套会话守卫；
+    // `masterKeyFile`/`pairingPepper` 只用于配对码 pepper（缺失即 503）。
+    masterKeyFile: deps.masterKeyFile,
+    ...(deps.pairingPepper === undefined ? {} : { pepper: deps.pairingPepper }),
+    ...(deps.log === undefined ? {} : { log: deps.log }),
+  })
+
+  // 远程命令：生成（会话）/ 领取（设备令牌 + 租约）/ 回执（幂等）。
+  registerCommandRoutes(app, {
+    db: deps.db,
+    policy: deps.policy,
+    now: deps.now,
+    guards: deps.guards,
+    ...(deps.log === undefined ? {} : { log: deps.log }),
+  })
+
+  // 配对码：签发 / 列举 / 撤销。缺 pepper 时 fail closed（503），绝不无盐哈希。
+  registerPairingCodeRoutes(app, {
+    db: deps.db,
+    policy: deps.policy,
+    now: deps.now,
+    guards: deps.guards,
+    masterKeyFile: deps.masterKeyFile,
+    ...(deps.pairingPepper === undefined ? {} : { pepper: deps.pairingPepper }),
     ...(deps.log === undefined ? {} : { log: deps.log }),
   })
 }

@@ -1,0 +1,73 @@
+# 后端单机部署（飞牛 NAS / 任意 Docker 主机）
+#
+# 用法见 deploy/README.md。两条硬约束先写在最前面：
+# 1. 基础镜像必须是 Node ≥ 22.15（本文件用 Dockerfile 的 node:24），否则启动器 exit 2；
+# 2. 秘密文件在宿主机上必须 `chown 1000:1000` + `chmod 600`——服务端对 POSIX 秘密文件
+#    强制要求"仅所有者可读"，而容器里的进程是 uid 1000（node）。
+#    因此这里用 bind mount 而不是 Compose 的 `secrets:`（后者默认挂成 0444，会被拒绝）。
+
+name: yfe-server
+
+services:
+  # 启动前置门：真的开库、跑迁移、核对表清单。失败就让 server 不启动。
+  # 这样"库比程序新"（STORAGE_SCHEMA_TOO_NEW）之类的问题会在对外监听之前暴露。
+  preflight:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: yfe-server:alpha
+    command: ["--check"]
+    environment:
+      YFE_DATA_DIR: /data
+      YFE_PUBLIC_URL: http://localhost:8787
+      YFE_MASTER_KEY_FILE: /run/secrets/master.key
+      YFE_BOOTSTRAP_SECRET_FILE: /run/secrets/bootstrap.secret
+    volumes:
+      - yfe-data:/data
+      - ./secrets/master.key:/run/secrets/master.key:ro
+      - ./secrets/bootstrap.secret:/run/secrets/bootstrap.secret:ro
+    restart: "no"
+
+  server:
+    image: yfe-server:alpha
+    depends_on:
+      preflight:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      YFE_DATA_DIR: /data
+      YFE_LISTEN_HOST: 0.0.0.0
+      YFE_LISTEN_PORT: "8787"
+      # 🔴 生产模式下必填：缺失会直接启动失败（设计文档 04：只信任配置过的对外地址）。
+      # 换成你实际访问后端的地址：NAS 的 IP / 域名 / 反代地址。
+      YFE_PUBLIC_URL: http://localhost:8787
+      YFE_COOKIE_SECURE: "true"
+      YFE_LOG_LEVEL: info
+      YFE_MASTER_KEY_FILE: /run/secrets/master.key
+      YFE_BOOTSTRAP_SECRET_FILE: /run/secrets/bootstrap.secret
+      # 只有当前面确实有反向代理时才设置（服务端只信任这里列出的代理层，
+      # 不盲目信任所有 X-Forwarded-*）。
+      # YFE_TRUSTED_PROXY: 172.18.0.1
+    ports:
+      - "8787:8787"
+    volumes:
+      - yfe-data:/data
+      - ./secrets/master.key:/run/secrets/master.key:ro
+      - ./secrets/bootstrap.secret:/run/secrets/bootstrap.secret:ro
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8787/health/ready').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  # 数据库（含 WAL）、附件暂存区与备份都在这里。**不要**把 /data 指到会被
+  # 同步盘/网盘客户端扫描的目录：SQLite 文件被外部进程复制或截断会直接损坏。
+  yfe-data:

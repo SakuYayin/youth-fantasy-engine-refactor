@@ -19,8 +19,10 @@ import type { UserId, UtcTimestamp, WorkspaceId } from '@yfe/contracts'
 
 import { testClock } from './helpers.js'
 import {
+  MIGRATIONS,
   SCHEMA_DDL,
   SERVER_MIGRATIONS_TABLE,
+  SERVER_SCHEMA_VERSION,
   appliedServerMigrations,
   checksumOf,
   closeServerDatabase,
@@ -101,8 +103,11 @@ describe('已发布 v1 库升级到 v2', () => {
 
     const result = await migrateServerDatabase(db)
 
-    expect(result.applied).toEqual([2])
-    expect(currentServerSchemaVersion(db)).toBe(2)
+    // 🔴 断言"版本 2 被应用了"，而不是"只应用了 2"：把清单写死会让此后每新增
+    // 一个迁移都误报失败（本轮加版本 3 时就踩到了）。版本 2 的数据语义（workspaces
+    // 回填）由下面几行验证，与"清单里还有没有别的版本"无关。
+    expect(result.applied).toContain(2)
+    expect(currentServerSchemaVersion(db)).toBe(SERVER_SCHEMA_VERSION)
 
     const workspace = findWorkspace(db, workspaceId)
     expect(workspace).not.toBeNull()
@@ -122,14 +127,17 @@ describe('已发布 v1 库升级到 v2', () => {
     const { db, workspaceId } = openV1Database()
 
     const first = await migrateServerDatabase(db)
-    expect(first.applied).toEqual([2])
+    expect(first.applied).toContain(2)
 
     const second = await migrateServerDatabase(db)
     expect(second.applied).toEqual([])
-    expect(second.schemaVersion).toBe(2)
+    expect(second.schemaVersion).toBe(SERVER_SCHEMA_VERSION)
 
     const versions = appliedServerMigrations(db)
-    expect(versions.map((entry) => entry.version)).toEqual([1, 2])
+    // 已应用的版本号必须与迁移清单逐一对齐（含版本 3）。
+    expect(versions.map((entry) => entry.version)).toEqual(
+      MIGRATIONS.map((migration) => migration.version),
+    )
     expect(versions.every((entry) => entry.success)).toBe(true)
     // 版本 1 的记录没被改写（已发布迁移的校验和是防偷改的锚点）。
     expect(versions[0]?.checksum).toBe(checksumOf(SCHEMA_DDL))

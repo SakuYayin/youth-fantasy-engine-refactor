@@ -35,7 +35,13 @@
     "@fastify/cookie": "^11.1.3"
   },
   "scripts": {
+    "dev": "node bin/serve.mjs",
+    "start": "node bin/serve.mjs",
+    "preflight": "node bin/serve.mjs --check",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
+  },
+  "bin": {
+    "yfe-server": "./bin/serve.mjs"
   }
 }

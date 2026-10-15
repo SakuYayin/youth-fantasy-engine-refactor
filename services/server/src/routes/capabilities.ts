@@ -15,6 +15,9 @@
  * 因此 `maxBatchBytes` 取 `min(SYNC_LIMITS.maxBatchBytes, config.bodyLimitBytes)`：
  * 运维把 `YFE_BODY_LIMIT_BYTES` 调小以后，Fastify 会在进路由之前就 413，
  * 此时如果 capabilities 仍然报 4 MiB，客户端就会按一个服务端根本收不下的上限分片。
+ *
+ * `assets.partSizeBytes` 同理取 `min(SYNC_ASSETS.partSizeBytes, bodyLimitBytes)`：
+ * 默认值恰好是 8 MiB 分片 vs 4 MiB 传输上限，照上报值切分片必被 413（R-41）。
  */
 
 import { SYNC_PROTOCOL_VERSION } from '@yfe/contracts'
@@ -47,7 +50,7 @@ export function registerCapabilitiesRoute(app: FastifyInstance, deps: Capabiliti
         },
         assets: {
           enabled: SYNC_ASSETS.enabled,
-          partSizeBytes: SYNC_ASSETS.partSizeBytes,
+          partSizeBytes: Math.min(SYNC_ASSETS.partSizeBytes, deps.bodyLimitBytes),
           maxAssetBytes: SYNC_ASSETS.maxAssetBytes,
         },
         commands: SUPPORTED_COMMANDS,

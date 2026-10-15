@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto'
 import { ContractError, checkSchemaCompat, newIds } from '@yfe/contracts'
 import type { ErrorPayload, Result } from '@yfe/contracts'
 
+import { ASSET_JOB_DDL } from './assetJobDdl.js'
 import { SCHEMA_DDL, SERVER_SCHEMA_VERSION } from './ddl.js'
 import { SYNC_DDL_V2 } from './syncDdl.js'
 import type { ServerDb } from './open.js'
@@ -104,6 +105,13 @@ export const MIGRATIONS: readonly ServerMigration[] = [
     version: 2,
     checksum: checksumOf(SYNC_DDL_V2),
     statements: SYNC_DDL_V2,
+  },
+  {
+    // 附件与任务：分片对账、资产登记与引用、任务与任务事件日志。
+    // 全部是纯新增表/索引（无回填），理由见 `assetJobDdl.ts` 文件头。
+    version: 3,
+    checksum: checksumOf(ASSET_JOB_DDL),
+    statements: ASSET_JOB_DDL,
   },
 ]
 

@@ -203,3 +203,112 @@ export {
   recordAuditEvent,
 } from './audit.js'
 export type { AuditAction, AuditEventRow, AuditOutcome, AuditQuery, RecordAuditInput } from './audit.js'
+
+// --- 附件上传与资产（迁移 3） ---
+export {
+  abortUploadSession,
+  completeUploadSession,
+  countAssetRefs,
+  countUploadParts,
+  deleteAssetRef,
+  findAssetById,
+  findAssetByStorageKey,
+  findUploadSession,
+  insertAsset,
+  insertAssetRef,
+  insertUploadSession,
+  listAssetRefs,
+  listAssetRefsForEntity,
+  listUploadPartNumbers,
+  listUploadParts,
+  markAssetPresent,
+  markUploadSessionCompleting,
+  recordUploadPart,
+  releaseUploadSessionCompleting,
+  softDeleteAsset,
+  updateAssetState,
+} from './assets.js'
+export type {
+  AssetRefRow,
+  AssetRow,
+  AssetState,
+  NewAsset,
+  NewAssetRef,
+  NewUploadSession,
+  ReceivedUploadPart,
+  RecordedPart,
+  UploadPartRow,
+  UploadSessionRow,
+  UploadStatus,
+} from './assets.js'
+
+// --- 任务队列（迁移 3） ---
+export {
+  CLAIMABLE_JOB_STATUSES,
+  DEFAULT_JOB_LEASE_MS,
+  DEFAULT_JOB_MAX_ATTEMPTS,
+  JOB_OUTPUT_KINDS,
+  JOB_STATUSES,
+  addMs,
+  appendJobOutput,
+  cancelJob,
+  claimJob,
+  completeJob,
+  countJobOutputs,
+  countJobsByStatus,
+  defaultJobIdSource,
+  failJob,
+  getJob,
+  getJobDetail,
+  heartbeatJob,
+  isJobOutputKind,
+  isJobStatus,
+  listJobEvents,
+  listJobOutputs,
+  listJobs,
+  submitJob,
+} from './jobs.js'
+export type {
+  AppendJobOutputRequest,
+  CancelJobResult,
+  CancelJobStatus,
+  ClaimJobRequest,
+  ClaimJobResult,
+  CompleteJobRequest,
+  FailJobRequest,
+  HeartbeatJobRequest,
+  JobDetail,
+  JobIdSource,
+  JobOutputKind,
+  JobOutputRecord,
+  JobRepoDeps,
+  JobStreamEvent,
+  ListJobEventsRequest,
+  ListJobOutputsRequest,
+  ListJobsRequest,
+  SubmitJobRequest,
+  SubmitJobResult,
+} from './jobs.js'
+
+// --- 远程命令（迁移 3） ---
+export {
+  DEFAULT_COMMAND_LEASE_MS,
+  ackRemoteCommand,
+  claimRemoteCommand,
+  expireStaleRemoteCommands,
+  findRemoteCommandById,
+  insertRemoteCommand,
+  listRemoteCommandsForDevice,
+  toRemoteCommand,
+} from './commands.js'
+export type {
+  AckRemoteCommandInput,
+  AckRemoteCommandResult,
+  ClaimRemoteCommandInput,
+  ClaimedRemoteCommand,
+  InsertRemoteCommandInput,
+  RemoteCommandRow,
+} from './commands.js'
+
+// --- 迁移 3 的 DDL（供体检与迁移清单对齐） ---
+export { ASSET_JOB_DDL, ASSET_JOB_TABLE_NAMES } from './assetJobDdl.js'

@@ -23,6 +23,8 @@
  *    会把"后提交的变更排到前面"，客户端一推进游标就永久漏掉中间那段。
  * 4. **重试回放的是原响应原文。** 同 batchId + 同规范化载荷摘要 → 直接返回
  *    落库时的 `response_json`，不再做一次基线校验（原结果已经成立）。
+ *    回执正文读不回来时**明确报 `STORAGE_CORRUPT`**，绝不当成"没有回执"：
+ *    当成空结果会让客户端以为提交从未发生 → 重新提交同一份载荷 → 可能二次写入。
  */
 
 import { ContractError, canManageMembers } from '@yfe/contracts'
@@ -81,6 +83,40 @@ import {
   payloadTooLargeError,
   requireWellFormedId,
 } from '../sync/protocol.js'
+
+// ---------------------------------------------------------------------------
+// 回执正文
+// ---------------------------------------------------------------------------
+
+/**
+ * 读取回执里落库的完整提交结果原文。
+ *
+ * 🔴 读不回来只可能是**存储损坏或被外部改写**，绝不等于"该批次没有结果"。因此：
+ * - 不返回半个回执、不落到"当作第一次提交"的分支（会二次写入）；
+ * - 不抛裸 `SyntaxError`（那会折算成 `INTERNAL_ERROR` 500，运维看不出是存储问题）；
+ * - 明确报 `STORAGE_CORRUPT`（503）：客户端保留本地稿稍后重试，运维走备份恢复。
+ *
+ * `detail.reason` 只放错误**名字**，不放 `JSON.parse` 的原始消息——原始消息会
+ * 把回执正文（含文档正文）片段带进日志。
+ */
+function parseReceiptResponse(
+  receipt: { readonly batchId: string; readonly responseJson: string },
+  requestId: RequestId,
+): BatchSubmitOutput {
+  try {
+    return JSON.parse(receipt.responseJson) as BatchSubmitOutput
+  } catch (thrown) {
+    throw new ContractError({
+      code: 'STORAGE_CORRUPT',
+      message: '该批次的回执内容已损坏，无法回放；请保留本地稿，等运维从备份恢复或执行完整重同步后再试。',
+      requestId,
+      detail: {
+        batchId: receipt.batchId,
+        reason: thrown instanceof Error ? thrown.name : typeof thrown,
+      },
+    })
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 请求体
@@ -659,7 +695,7 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps): v
         return reply
           .status(200)
           .header('cache-control', 'no-store')
-          .send(JSON.parse(existing.responseJson) as BatchSubmitOutput)
+          .send(parseReceiptResponse(existing, requestId))
       }
 
       const plan = planBaselines(deps.db, workspaceId, operations, requestId)
@@ -854,7 +890,7 @@ export function registerSyncRoutes(app: FastifyInstance, deps: SyncRouteDeps): v
         payloadDigest: receipt.payloadDigest,
         // 契约 ReceiptOutput 是回执的"头"；这里额外附带首次提交的完整结果，
         // 让"确认响应丢了"的客户端不必重新提交即可拿到每个 opId 的 revision。
-        result: JSON.parse(receipt.responseJson) as unknown,
+        result: parseReceiptResponse(receipt, requestId) as unknown,
       })
     },
   )
