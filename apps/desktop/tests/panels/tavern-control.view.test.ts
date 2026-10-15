@@ -99,7 +99,7 @@ function harness(entities: AppSnapshot['settingsEntities'] = [], options: Harnes
   const submitCalls: SettingsEntitySubmit[] = []
   const submitResult: SettingsEntitySubmitResult =
     options.submitResult ?? { ok: true, entityId: 'entity-panel-1', revision: 'r2', orderKey: 'k' }
-  const loadQueries: Array<Parameters<AppState['loadSettingsEntities']>> = []
+  const loadQueries: Array<Parameters<AppState['loadSettingsEntities']>[0]> = []
   const state: AppState = {
     getSnapshot: () => snapshot,
     subscribe: () => () => {},

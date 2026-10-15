@@ -132,7 +132,7 @@ describe('章节管理端到端：重命名 / 重排 / 级联软删', () => {
     // 其余两篇相对顺序不变：乙 仍在 丙 之前
     expect(tree.find((row) => row.id === second.documentId)?.title).toBe('乙');
     const keys = tree.map((row) => row.orderKey);
-    expect(keys[1] < keys[2]).toBe(true); // 丙 在 甲 之前
+    expect(keys[1]! < keys[2]!).toBe(true); // 丙 在 甲 之前
   });
 
   it('重命名 + 重排同时给：两步都生效，orderKey 有值', async () => {
@@ -164,7 +164,7 @@ describe('章节管理端到端：重命名 / 重排 / 级联软删', () => {
     });
     expect(updated.ok).toBe(false);
     if (updated.ok) return;
-    expect((updated.error as Record<string, unknown>).code).toBe('VALIDATION_FAILED');
+    expect(updated.error.code).toBe('VALIDATION_FAILED');
   });
 
   it('过期 expectedRevision → REVISION_CONFLICT，标题不变', async () => {
@@ -184,7 +184,7 @@ describe('章节管理端到端：重命名 / 重排 / 级联软删', () => {
     });
     expect(second.ok).toBe(false);
     if (second.ok) return;
-    expect((second.error as Record<string, unknown>).code).toBe('REVISION_CONFLICT');
+    expect(second.error.code).toBe('REVISION_CONFLICT');
     const tree = await readTree(ws, projectId);
     expect(tree.map((row) => row.title)).toContain('第一次改名');
     expect(tree.map((row) => row.title)).not.toContain('第二次改名');
@@ -201,7 +201,7 @@ describe('章节管理端到端：重命名 / 重排 / 级联软删', () => {
     });
     expect(updated.ok).toBe(false);
     if (updated.ok) return;
-    expect((updated.error as Record<string, unknown>).code).toBe('PERMISSION_WORKSPACE_MISMATCH');
+    expect(updated.error.code).toBe('PERMISSION_WORKSPACE_MISMATCH');
   });
 
   it('级联软删：deletedCount 含子树，树隐藏墓碑而 includeDeleted 能看到', async () => {
@@ -256,6 +256,6 @@ describe('章节管理端到端：重命名 / 重排 / 级联软删', () => {
     });
     expect(got.ok).toBe(false);
     if (got.ok) return;
-    expect((got.error as Record<string, unknown>).code).toBe('NOT_FOUND_DOCUMENT');
+    expect(got.error.code).toBe('NOT_FOUND_DOCUMENT');
   });
 });

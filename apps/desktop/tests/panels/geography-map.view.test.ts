@@ -175,7 +175,7 @@ function mountPanel(harness: StateHarness) {
   return mount(GeographyMap, {
     props: {
       state: harness.state,
-      tab: PANEL_TAB,
+      tab: PANEL_TAB!,
     } satisfies MountProps,
   })
 }

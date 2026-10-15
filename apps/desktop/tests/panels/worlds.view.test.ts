@@ -11,7 +11,12 @@ import { nextTick } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
 import { getTab } from '@yfe/schema-tabs'
 
-import type { AppSnapshot, AppState, SettingsEntityView } from '../../src/renderer/app-state.js'
+import type {
+  AppSnapshot,
+  AppState,
+  SettingsEntityQuery,
+  SettingsEntityView,
+} from '../../src/renderer/app-state.js'
 import { WORLDS_PANEL_TEXT } from '../../src/renderer/panels/worlds-model.js'
 import Worlds from '../../src/renderer/panels/worlds.vue'
 
@@ -42,6 +47,7 @@ function snapshotWith(entities: AppSnapshot['settingsEntities']): AppSnapshot {
   return {
     ready: true, loading: false, appVersion: 'test', databasePath: null, databaseSchemaVersion: 1,
     readOnly: false, pendingOutboxCount: 0, lastSavedAt: null, projectId: 'project_1', tree: [],
+    documents: [],
     selectedDocumentId: 'doc_1', title: '第一章', body: '原始正文', charCount: 4, revision: 'r1',
     saveStatus: 'saved', saveDetail: null, conflict: null, lastError: null, expandedIds: [],
     settingsEntities: entities, settingsLoading: false, selectedSettingsEntityId: null,
@@ -57,7 +63,7 @@ function harness(
   let snapshot = snapshotWith(entities)
   let notify: ((snapshot: AppSnapshot) => void) | undefined
   const unsubscribe = vi.fn()
-  const loadQueries: Array<Parameters<AppState['loadSettingsEntities']>> = []
+  const loadQueries: Array<SettingsEntityQuery | undefined> = []
   const state: AppState = {
     getSnapshot: () => snapshot,
     subscribe: (listener) => { notify = listener; return unsubscribe },
@@ -73,6 +79,13 @@ function harness(
     selectSettingsEntity: async () => true, refreshSettingsEntity: async () => true,
     submitSettingsEntity: async () => ({ ok: false, code: 'NOT_IMPLEMENTED', message: '测试桩' }),
     setNavigationGuard: () => {}, dispose: () => {},
+    ai: {
+      getConfig: () => null,
+      configured: () => false,
+      reload: async () => false,
+      saveConfig: async () => false,
+      complete: async () => ({ ok: false as const, code: 'AI_NOT_CONFIGURED' as const, message: '测试桩' }),
+    },
   }
   const wrapper = mount(Worlds, { props: { state, tab: worldsTab } })
   return {

@@ -36,7 +36,7 @@ const ABOUT_TAB: TabDef = (() => {
   return tab
 })()
 
-const AI_FAILURE = { ok: false as const, code: 'AI_NOT_CONFIGURED', message: '测试桩' }
+const AI_FAILURE = { ok: false as const, code: 'AI_NOT_CONFIGURED' as const, message: '测试桩' }
 
 interface StateHarness {
   readonly state: AppState

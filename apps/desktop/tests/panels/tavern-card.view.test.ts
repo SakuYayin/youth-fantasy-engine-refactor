@@ -17,6 +17,7 @@ import { getTab } from '@yfe/schema-tabs'
 import type {
   AppSnapshot,
   AppState,
+  SettingsEntitySubmit,
   SettingsEntitySubmitResult,
   SettingsEntityView,
 } from '../../src/renderer/app-state.js'
@@ -61,6 +62,7 @@ function snapshotWith(entities: AppSnapshot['settingsEntities']): AppSnapshot {
   return {
     ready: true, loading: false, appVersion: 'test', databasePath: null, databaseSchemaVersion: 1,
     readOnly: false, pendingOutboxCount: 0, lastSavedAt: null, projectId: 'project_1', tree: [],
+    documents: [],
     selectedDocumentId: 'doc_1', title: '第一章', body: '原始正文', charCount: 4, revision: 'r1',
     saveStatus: 'saved', saveDetail: null, conflict: null, lastError: null, expandedIds: [],
     settingsEntities: entities, settingsLoading: false, selectedSettingsEntityId: null,
@@ -91,10 +93,10 @@ function harness(entities: AppSnapshot['settingsEntities'], options: HarnessOpti
     complete,
   }
   let snapshot = snapshotWith(entities)
-  const submitCalls: Array<Parameters<AppState['submitSettingsEntity']>> = []
+  const submitCalls: SettingsEntitySubmit[] = []
   const submitResult: SettingsEntitySubmitResult =
     options.submitResult ?? { ok: true, entityId: 'entity-panel-1', revision: 'r2', orderKey: 'k' }
-  const loadQueries: Array<Parameters<AppState['loadSettingsEntities']>> = []
+  const loadQueries: Array<Parameters<AppState['loadSettingsEntities']>[0]> = []
   const state: AppState = {
     getSnapshot: () => snapshot,
     subscribe: () => () => {},

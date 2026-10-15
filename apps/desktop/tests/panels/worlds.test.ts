@@ -23,8 +23,9 @@ function entity(input: {
   deleted?: boolean
   updatedAt?: string
 }): WorldEntityInput {
-  return {
-    // 以下三个字段是 SettingsEntityView 的额外字段——证明视图实体可直接传入：
+  // 先推断出全量实体再返回：额外字段是 SettingsEntityView 的字段，
+  // 结构子类型化后证明视图实体可直接传入（字面量直返会触发多余属性检查）。
+  const viewEntity = {
     id: `id-${input.schemaTemplateId}-${input.updatedAt ?? 'none'}`,
     projectId: 'project_1',
     revision: 'r1',
@@ -34,6 +35,7 @@ function entity(input: {
     deleted: input.deleted ?? false,
     ...(input.updatedAt === undefined ? {} : { updatedAt: input.updatedAt }),
   }
+  return viewEntity
 }
 
 describe('groupEntitiesByTemplate：分组与计数', () => {

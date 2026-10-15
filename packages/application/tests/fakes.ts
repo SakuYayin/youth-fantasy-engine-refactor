@@ -415,15 +415,15 @@ export function createFakeHarness(options: FakeOptions = {}): FakeHarness {
         return Promise.resolve(
           ok(
             rows.map((project) => ({
-              id: project.projectId,
+              id: project.projectId as ProjectId,
               name: project.name,
               summary: '',
               projectType: 'full',
-              workspaceId: project.workspaceId,
+              workspaceId: project.workspaceId as WorkspaceId,
               revision: encodeRevision(project.revisionSeq),
               deleted: project.deleted,
-              createdAt: '2026-01-01T00:00:00.000Z',
-              updatedAt: '2026-01-01T00:00:00.000Z',
+              createdAt: '2026-01-01T00:00:00.000Z' as UtcTimestamp,
+              updatedAt: '2026-01-01T00:00:00.000Z' as UtcTimestamp,
               authorityTargetId: null,
             })),
           ),

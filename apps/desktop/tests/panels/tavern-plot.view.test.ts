@@ -16,10 +16,11 @@ import type { SettingsEntitySubmit, SettingsEntitySubmitResult } from '../../src
 import type { AppState } from '../../src/renderer/app-state.js'
 import type { PanelProps } from '../../src/renderer/panels/types.js'
 import { getTab } from '@yfe/schema-tabs'
+import type { TabDef } from '@yfe/schema-tabs'
 import TavernPlotPanel from '../../src/renderer/panels/tavern-plot.vue'
 import type { TavernPlotSceneRecord } from '../../src/renderer/panels/tavern-plot-model.js'
 
-const tab = getTab('tavern-plot')
+const tab: TabDef = getTab('tavern-plot')!
 if (tab === undefined) throw new Error('页签 tavern-plot 未注册（schema-tabs）')
 
 const SCENE_TITLE_REQUIRED = '标题不能为空。'
@@ -307,7 +308,7 @@ describe('tavern-plot 新建/编辑/删除/移动', () => {
     await harness.wrapper.get('[data-testid="tavern-plot-item-plot_a"]').trigger('click')
     await settle()
     expect((harness.wrapper.get('[data-testid="tavern-plot-input-title"]').element as HTMLInputElement).value).toBe('第一幕')
-    expect(harness.wrapper.get('[data-testid="tavern-plot-cancel-edit"]').exists()).toBe(true)
+    expect(harness.wrapper.find('[data-testid="tavern-plot-cancel-edit"]').exists()).toBe(true)
     harness.wrapper.get('[data-testid="tavern-plot-input-title"]').setValue('第一幕（修订）')
     await harness.wrapper.get('[data-testid="tavern-plot-save"]').trigger('click')
     await settle()
@@ -336,7 +337,7 @@ describe('tavern-plot 新建/编辑/删除/移动', () => {
     await clickDialogButton(harness, '取消')
     await settle()
     expect(harness.submitCalls).toHaveLength(0)
-    expect(harness.wrapper.get('[data-testid="tavern-plot-item-plot_a"]').exists()).toBe(true)
+    expect(harness.wrapper.find('[data-testid="tavern-plot-item-plot_a"]').exists()).toBe(true)
     // 确认：落库
     await harness.wrapper.get('[data-testid="tavern-plot-delete-plot_a"]').trigger('click')
     await settle()

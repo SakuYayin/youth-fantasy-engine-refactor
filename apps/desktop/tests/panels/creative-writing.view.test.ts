@@ -475,7 +475,7 @@ describe('creative-writing（创意写作）生成', () => {
     await settle()
 
     expect(h.stub.calls).toHaveLength(1)
-    const request = h.stub.calls[0]
+    const request = h.stub.calls[0]!
     expect(request?.system).toBe(writingModeById('continue').system)
     expect(request?.maxTokens).toBe(CONTINUE_MAX_TOKENS)
     expect('temperature' in request).toBe(false)
@@ -553,7 +553,7 @@ describe('creative-writing（创意写作）生成', () => {
   it('生成中可取消：按钮 loading、状态回空闲，迟到结果被丢弃（取消仅忽略结果）', async () => {
     const { h, wrapper } = readyHarness()
     await settle()
-    let resolvePending: ((result: AiResult) => void) | null = null
+    let resolvePending: ((result: AiResult) => void) | undefined
     h.stub.responder = async () =>
       new Promise<AiResult>((resolve) => {
         resolvePending = resolve

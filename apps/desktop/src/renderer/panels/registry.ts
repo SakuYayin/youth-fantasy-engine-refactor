@@ -48,7 +48,10 @@ export const PANEL_COMPONENTS: Readonly<Record<string, PanelComponent>> = {
   'inspire-tools': InspireTools,
   'material-library': MaterialLibrary,
   'model-settings': ModelSettings,
-  plotCanvas: PlotCanvas,
+  // 🔴 键必须逐字等于 `TabDef.id`。曾误写成 `plotCanvas`（驼峰），而权威 id 是
+  // `plot-canvas`（packages/schema-tabs/src/schemaTabs/part2.ts 的 `id: 'plot-canvas'`）
+  // ⇒ 该面板永远匹配不上、静默回落占位。已由 `tests/panel-registry.test.ts` 钉死。
+  'plot-canvas': PlotCanvas,
   trajectory: Trajectory,
   'tavern-card': TavernCard,
   'tavern-plot': TavernPlot,
@@ -59,7 +62,11 @@ export const PANEL_COMPONENTS: Readonly<Record<string, PanelComponent>> = {
   'tavern-report': TavernReport,
   'tavern-control': TavernControl,
   worlds: Worlds,
-}
+  // 🔴 整表断言的原因：`tsconfig.tests.json` 是纯 tsc，`.vue` 走 `vue-shims.d.ts` 的
+  // 宽松声明（props 是 `Record<string, unknown>`），拿它当 `Component<PanelProps>`
+  // 逐项赋值必然 TS2322；而 vue-tsc 那侧读的是真实 SFC props，本文件在那边本来就通过。
+  // 键与真实页签 id 的一致性（含「不多不少」）由 `tests/panel-registry.test.ts` 钉死。
+} as Readonly<Record<string, PanelComponent>>
 
 export function resolvePanelComponent(tabId: string): PanelComponent {
   return PANEL_COMPONENTS[tabId] ?? (Placeholder as PanelComponent)

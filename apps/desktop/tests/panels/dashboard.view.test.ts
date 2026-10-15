@@ -383,7 +383,7 @@ describe('dashboard（写作面板）写作目标', () => {
     await settle()
 
     expect(h.submitCalls).toHaveLength(1)
-    const submit = h.submitCalls[0]
+    const submit = h.submitCalls[0]!
     expect(submit['schemaTemplateId']).toBe('panel:dashboard')
     expect(submit['values']).toEqual({ dailyGoal: 3500 })
     expect(wrapper.get('[data-testid="dashboard-goal-status"]').text()).toContain('本地已保存')

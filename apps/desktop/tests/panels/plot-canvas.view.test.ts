@@ -163,7 +163,7 @@ interface PlotCanvasMountProps {
 
 /** 挂载面板（本地 props 接口带索引签名）并等挂载期 load 完成。 */
 async function mountPanel(state: AppState) {
-  const mountProps: PlotCanvasMountProps = { state, tab: plotTab }
+  const mountProps: PlotCanvasMountProps = { state, tab: plotTab! }
   const wrapper = mount(PlotCanvas, { props: mountProps })
   await flushPromises()
   return wrapper
@@ -329,7 +329,7 @@ describe('plot-canvas 视图：编辑与自动保存', () => {
 describe('plot-canvas 视图：AI 情节摘要', () => {
   it('摘要成功：请求只发一次且形状正确（无 maxTokens/temperature），完成后展示摘要', async () => {
     const completeCalls: unknown[] = []
-    let resolveComplete: ((result: AiResult) => void) | null = null
+    let resolveComplete: ((result: AiResult) => void) | undefined
     const { state } = createHarness({
       snapshot: snapshotWith({ settingsEntities: [panelEntity] }),
       complete: (request) => {

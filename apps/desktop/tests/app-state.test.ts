@@ -238,6 +238,10 @@ function makeHarness(initial: Overrides = {}, storedProject: string | null = 'pr
       if (found === undefined) return failure('NOT_FOUND') as never
       return { ok: true, value: { entity: found } }
     },
+    // AI 通道不归状态机用例驱动（面板经 `state.ai` 的 AiPort 走），这里只给一个
+    // 确定性的「未配置模型」回执：既满足 RendererClientPort 的形状，
+    // 又不会把网络/上游错误混进本文件的保存与导航断言。
+    aiComplete: async () => failure('AI_NOT_CONFIGURED') as never,
     saveSettingsEntity: async (input) => {
       settingsSaveInputs.push(input)
       if (overrides.saveSettings !== undefined) return overrides.saveSettings(input)

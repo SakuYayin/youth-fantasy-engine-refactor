@@ -23,7 +23,7 @@ import type { TabDef } from '@yfe/schema-tabs'
 
 import type { DocumentId, DocumentSummary, ProjectId, Revision, UtcTimestamp } from '@yfe/contracts'
 
-import type { AppState } from '../../src/renderer/app-state.js'
+import type { AppSnapshot, AppState } from '../../src/renderer/app-state.js'
 import {
   EMPTY_HINT,
   SUMMARY_LABEL_ACTIVE,
@@ -126,7 +126,8 @@ function mountView(state: AppState = stateStub(DOCS)) {
 
 /** 期望视图：与组件对同一份快照、同一时刻的模型输出（接线断言的基准）。 */
 function expectedView(documents: unknown) {
-  return buildTrajectoryView({ documents } as unknown as AppState, new Date())
+  // 与 stateStub 返回的快照同构（只带 documents 的松散快照，故经 unknown 收窄到 AppSnapshot）。
+  return buildTrajectoryView({ documents } as unknown as AppSnapshot, new Date())
 }
 
 describe('「创作轨迹」面板', () => {
@@ -172,7 +173,7 @@ describe('「创作轨迹」面板', () => {
       formatInvalidNote(expected.malformedCount),
     )
     // 第一组（最新一天）条目与模型输出逐条一致：时间 + 标题 + 字数
-    const firstDay = dayElements[0]
+    const firstDay = dayElements[0]!
     const renderedEntries = firstDay.findAll('[data-testid^="trajectory-entry-"]')
     const expectedEntries = expected.groups[0]?.entries ?? []
     expect(renderedEntries.map((entry) => entry.get('.trajectory__entry-time').text())).toEqual(

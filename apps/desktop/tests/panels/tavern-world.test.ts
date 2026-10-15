@@ -171,7 +171,7 @@ describe('列表操作（order = 数组下标）', () => {
     const added = seedEntry({ id: 'world_bbbbbbbbbbbb', keywords: '星陨节', order: 99 })
     const next = upsertEntry(items, added)
     expect(next.length).toBe(2)
-    expect(next[1].id).toBe(added.id)
+    expect(next[1]?.id).toBe(added.id)
     expect(next.map((entry) => entry.order)).toEqual([0, 1])
   })
 
@@ -181,7 +181,7 @@ describe('列表操作（order = 数组下标）', () => {
     const replaced = seedEntry({ keywords: '灵脉', content: '替换后的内容' })
     const next = upsertEntry(items, replaced)
     expect(next.length).toBe(2)
-    expect(next[0].keywords).toBe('灵脉')
+    expect(next[0]?.keywords).toBe('灵脉')
     expect(next[1]).toBe(second)
   })
 
@@ -195,15 +195,15 @@ describe('列表操作（order = 数组下标）', () => {
 
   it('removeEntry 删不存在的 id 返回等价数组', () => {
     const items = [seedEntry()]
-    expect(removeEntry(items, 'world_nopeeeeeeeee').map((entry) => entry.id)).toEqual([items[0].id])
+    expect(removeEntry(items, 'world_nopeeeeeeeee').map((entry) => entry.id)).toEqual([items[0]?.id])
   })
 
   it('toggleEntryEnabled 只翻目标条目', () => {
     const second = seedEntry({ id: 'world_bbbbbbbbbbbb', enabled: false, order: 1 })
     const next = toggleEntryEnabled([seedEntry(), second], second.id, true)
-    expect(next[0].enabled).toBe(true)
-    expect(next[1].enabled).toBe(true)
-    expect(toggleEntryEnabled([seedEntry()], seedEntry().id, false)[0].enabled).toBe(false)
+    expect(next[0]?.enabled).toBe(true)
+    expect(next[1]?.enabled).toBe(true)
+    expect(toggleEntryEnabled([seedEntry()], seedEntry().id, false)[0]?.enabled).toBe(false)
   })
 
   it('findEntryById 找得到与找不到', () => {
@@ -230,15 +230,15 @@ describe('库值兜底（store.data 是 ShallowRef，库里可能存坏数据）
   it('非条目形状的行丢弃（null/标量/数组）', () => {
     const items = normalizeEntries([seedEntry(), null, 'x', 42, []])
     expect(items.length).toBe(1)
-    expect(items[0].id).toBe('world_aaaaaaaaaaaa')
+    expect(items[0]?.id).toBe('world_aaaaaaaaaaaa')
   })
 
   it('非字符串字段补默认值', () => {
     const items = normalizeEntries([{ keywords: 1, content: 2 }])
     expect(items.length).toBe(1)
-    expect(items[0].keywords).toBe('')
-    expect(items[0].content).toBe('')
-    expect(items[0].enabled).toBe(false)
+    expect(items[0]?.keywords).toBe('')
+    expect(items[0]?.content).toBe('')
+    expect(items[0]?.enabled).toBe(false)
   })
 
   it('缺字段补齐：缺 id 补新 id、缺文案补空串、enabled 缺省 false、order 归一化', () => {
@@ -246,12 +246,12 @@ describe('库值兜底（store.data 是 ShallowRef，库里可能存坏数据）
       { keywords: 'a', content: 'b', enabled: true },
       { id: 'world_bbbbbbbbbbbb' },
     ])
-    expect(items[0].id.startsWith('world_')).toBe(true)
-    expect(items[0].keywords).toBe('a')
-    expect(items[0].enabled).toBe(true)
-    expect(items[1].keywords).toBe('')
-    expect(items[1].content).toBe('')
-    expect(items[1].enabled).toBe(false)
+    expect(items[0]?.id.startsWith('world_')).toBe(true)
+    expect(items[0]?.keywords).toBe('a')
+    expect(items[0]?.enabled).toBe(true)
+    expect(items[1]?.keywords).toBe('')
+    expect(items[1]?.content).toBe('')
+    expect(items[1]?.enabled).toBe(false)
     expect(items.map((entry) => entry.order)).toEqual([0, 1])
   })
 })
@@ -284,9 +284,9 @@ describe('AI 扩写：请求拼装', () => {
     const request = buildAiExpandRequest(entry)
     expect(request.maxTokens).toBe(2048)
     expect(request.messages.length).toBe(1)
-    expect(request.messages[0].role).toBe('user')
-    expect(request.messages[0].content).toContain('魔法学院,灵脉')
-    expect(request.messages[0].content).toContain('一座漂浮在云海上的魔法学院，灵脉贯穿主塔。')
+    expect(request.messages[0]?.role).toBe('user')
+    expect(request.messages[0]?.content).toContain('魔法学院,灵脉')
+    expect(request.messages[0]?.content).toContain('一座漂浮在云海上的魔法学院，灵脉贯穿主塔。')
     expect(request.system).toContain('世界设定')
   })
 })

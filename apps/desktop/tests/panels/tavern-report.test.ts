@@ -186,7 +186,7 @@ describe('tavern-report-model：AI 请求组装与解析', () => {
 
   it('buildAiReportRequest：单条 user 消息带对话原文，maxTokens 固定 2048', () => {
     const request = buildAiReportRequest('林晚：你醒了？\n苏橙：怀表在响。')
-    expect(request.system.length).toBeGreaterThan(0)
+    expect(request.system?.length).toBeGreaterThan(0)
     expect(request.system).toContain('JSON')
     expect(request.messages).toHaveLength(1)
     expect(request.messages[0]?.role).toBe('user')

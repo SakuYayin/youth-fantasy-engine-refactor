@@ -30,6 +30,9 @@ function harness() {
   let snapshot: AppSnapshot = {
     ready: true, loading: false, appVersion: 'test', databasePath: null, databaseSchemaVersion: 1,
     readOnly: false, pendingOutboxCount: 0, lastSavedAt: null, projectId: 'project_1', tree: [],
+    // 作品中心的列表来自快照的 documents（章节树之外的平铺摘要）；本文件只测编辑器接线，
+    // 给空数组即可，避免把「作品列表」的渲染断言混进来。
+    documents: [],
     selectedDocumentId: 'doc_1', title: '第一章', body: '原始正文', charCount: 4, revision: 'r1',
     saveStatus: 'saved', saveDetail: null, conflict: null, lastError: null, expandedIds: [],
     settingsEntities: [], settingsLoading: false, selectedSettingsEntityId: null,
@@ -48,6 +51,14 @@ function harness() {
     refreshSettingsEntity: async () => true,
     submitSettingsEntity: async () => ({ ok: false, code: 'NOT_IMPLEMENTED', message: '测试桩' }),
     setNavigationGuard: (value) => { guard = value }, dispose: () => {},
+    // 面板经 `state.ai` 拿配置并发请求；App.vue 本身不直接驱动 AI，故桩只满足形状。
+    ai: {
+      getConfig: () => null,
+      configured: () => false,
+      reload: async () => false,
+      saveConfig: async () => false,
+      complete: async () => ({ ok: false as const, code: 'AI_NOT_CONFIGURED' as const, message: '测试桩' }),
+    },
   }
   const wrapper = mount(App, { props: { state } })
   return { wrapper, state, canNavigate: () => guard?.(),

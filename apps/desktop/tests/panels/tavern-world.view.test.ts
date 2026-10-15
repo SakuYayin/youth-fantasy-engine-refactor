@@ -365,18 +365,21 @@ describe('背景设定面板 tavern-world：新建与校验', () => {
     await saveEntry(wrapper, '魔法学院,灵脉', '一座漂浮在云海上的学院。')
 
     expect(h.submitCalls.length).toBe(1)
-    expect(h.submitCalls[0].schemaTemplateId).toBe('panel:tavern-world')
-    const values = h.submitCalls[0].values as { items: TavernWorldEntry[]; updatedAt: string }
+    const first = h.submitCalls[0]
+    expect(first?.schemaTemplateId).toBe('panel:tavern-world')
+    const values = first?.values as { items: TavernWorldEntry[]; updatedAt: string }
     expect(values.items.length).toBe(1)
-    expect(values.items[0].keywords).toBe('魔法学院,灵脉')
-    expect(values.items[0].content).toBe('一座漂浮在云海上的学院。')
-    expect(values.items[0].enabled).toBe(true)
-    expect(values.items[0].order).toBe(0)
-    expect(values.items[0].id.startsWith('world_')).toBe(true)
+    expect(values.items[0]?.keywords).toBe('魔法学院,灵脉')
+    expect(values.items[0]?.content).toBe('一座漂浮在云海上的学院。')
+    expect(values.items[0]?.enabled).toBe(true)
+    expect(values.items[0]?.order).toBe(0)
+    expect(values.items[0]?.id.startsWith('world_')).toBe(true)
 
     expect(wrapper.get('[data-testid="tavern-world-form-title"]').text()).toBe(TEXT.editFormTitle)
     expect(wrapper.findAll('[data-testid="tavern-world-list"] > li').length).toBe(1)
-    expect(wrapper.get('[data-testid="tavern-world-keywords"]').element.value).toBe('魔法学院,灵脉')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="tavern-world-keywords"]').element.value).toBe(
+      '魔法学院,灵脉',
+    )
 
     wrapper.unmount()
   })
@@ -406,11 +409,11 @@ describe('背景设定面板 tavern-world：编辑与启用开关', () => {
     await saveEntry(wrapper, ENTRY_A.keywords, '修改后的内容。')
 
     expect(h.submitCalls.length).toBe(1)
-    const values = h.submitCalls[0].values as { items: TavernWorldEntry[] }
+    const values = h.submitCalls[0]?.values as { items: TavernWorldEntry[] }
     expect(values.items.length).toBe(2)
-    expect(values.items[0].id).toBe(ENTRY_A.id)
-    expect(values.items[0].content).toBe('修改后的内容。')
-    expect(values.items[1].id).toBe(ENTRY_B.id)
+    expect(values.items[0]?.id).toBe(ENTRY_A.id)
+    expect(values.items[0]?.content).toBe('修改后的内容。')
+    expect(values.items[1]?.id).toBe(ENTRY_B.id)
 
     wrapper.unmount()
   })
@@ -445,12 +448,12 @@ describe('背景设定面板 tavern-world：编辑与启用开关', () => {
     await settle()
 
     expect(h.submitCalls.length).toBe(1)
-    const values = h.submitCalls[0].values as { items: TavernWorldEntry[] }
-    expect(values.items[1].id).toBe(ENTRY_B.id)
-    expect(values.items[1].enabled).toBe(true)
-    expect(values.items[0].enabled).toBe(true)
-    expect(values.items[0].order).toBe(0)
-    expect(values.items[1].order).toBe(1)
+    const values = h.submitCalls[0]?.values as { items: TavernWorldEntry[] }
+    expect(values.items[1]?.id).toBe(ENTRY_B.id)
+    expect(values.items[1]?.enabled).toBe(true)
+    expect(values.items[0]?.enabled).toBe(true)
+    expect(values.items[0]?.order).toBe(0)
+    expect(values.items[1]?.order).toBe(1)
     expect(
       (wrapper.get<HTMLInputElement>(`[data-testid="tavern-world-item-toggle-${ENTRY_B.id}"]`).element)
         .checked,
@@ -499,10 +502,10 @@ describe('背景设定面板 tavern-world：删除（YfeDialog 确认）', () =>
     expect(wrapper.find('[data-testid="tavern-world-delete-dialog"]').exists()).toBe(false)
     expect(wrapper.findAll('[data-testid="tavern-world-list"] > li').length).toBe(1)
     expect(h.submitCalls.length).toBe(1)
-    const values = h.submitCalls[0].values as { items: TavernWorldEntry[] }
+    const values = h.submitCalls[0]?.values as { items: TavernWorldEntry[] }
     expect(values.items.length).toBe(1)
-    expect(values.items[0].id).toBe(ENTRY_B.id)
-    expect(values.items[0].order).toBe(0)
+    expect(values.items[0]?.id).toBe(ENTRY_B.id)
+    expect(values.items[0]?.order).toBe(0)
 
     wrapper.unmount()
   })
@@ -561,9 +564,9 @@ describe('背景设定面板 tavern-world：AI 扩写', () => {
     await settle()
 
     expect(h.stub.calls.length).toBe(1)
-    expect(h.stub.calls[0].maxTokens).toBe(2048)
-    expect(h.stub.calls[0].messages[0].content).toContain(ENTRY_A.keywords)
-    expect(h.stub.calls[0].messages[0].content).toContain(ENTRY_A.content)
+    expect(h.stub.calls[0]?.maxTokens).toBe(2048)
+    expect(h.stub.calls[0]?.messages[0]?.content).toContain(ENTRY_A.keywords)
+    expect(h.stub.calls[0]?.messages[0]?.content).toContain(ENTRY_A.content)
 
     expect(wrapper.get('[data-testid="tavern-world-ai-preview-body"]').text()).toBe(EXPANDED)
     expect(wrapper.find('[data-testid="tavern-world-expand-dialog"]').exists()).toBe(true)
@@ -587,11 +590,11 @@ describe('背景设定面板 tavern-world：AI 扩写', () => {
 
     expect(wrapper.find('[data-testid="tavern-world-expand-dialog"]').exists()).toBe(false)
     expect(h.submitCalls.length).toBe(1)
-    const values = h.submitCalls[0].values as { items: TavernWorldEntry[] }
-    expect(values.items[0].id).toBe(ENTRY_A.id)
-    expect(values.items[0].content).toBe(EXPANDED)
-    expect(values.items[0].keywords).toBe(ENTRY_A.keywords)
-    expect(values.items[0].enabled).toBe(true)
+    const values = h.submitCalls[0]?.values as { items: TavernWorldEntry[] }
+    expect(values.items[0]?.id).toBe(ENTRY_A.id)
+    expect(values.items[0]?.content).toBe(EXPANDED)
+    expect(values.items[0]?.keywords).toBe(ENTRY_A.keywords)
+    expect(values.items[0]?.enabled).toBe(true)
     expect(wrapper.get('[data-testid="tavern-world-preview-body"]').text()).toBe(EXPANDED)
     expect(wrapper.get('[data-testid="tavern-world-ai-message"]').text()).toBe(
       `已用 AI 扩写条目「${ENTRY_A.keywords}」，下一轮对话生效。`,

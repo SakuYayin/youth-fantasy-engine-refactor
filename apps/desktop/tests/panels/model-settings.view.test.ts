@@ -38,7 +38,7 @@ function configFixture(): AiModelConfig {
 function snapshotWith(projectId: string | null): AppSnapshot {
   return {
     ready: true, loading: false, appVersion: 'test', databasePath: null, databaseSchemaVersion: 1,
-    readOnly: false, pendingOutboxCount: 0, lastSavedAt: null, projectId, tree: [],
+    readOnly: false, pendingOutboxCount: 0, lastSavedAt: null, projectId, tree: [], documents: [],
     selectedDocumentId: null, title: '', body: '', charCount: 0, revision: null,
     saveStatus: 'saved', saveDetail: null, conflict: null, lastError: null, expandedIds: [],
     settingsEntities: [], settingsLoading: false, selectedSettingsEntityId: null,

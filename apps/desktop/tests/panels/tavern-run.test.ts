@@ -232,8 +232,8 @@ describe('tavern-run AI 请求组装', () => {
     expect(request.temperature).toBe(1.1)
     expect(request.maxTokens).toBe(512)
     expect(request.messages).toHaveLength(5)
-    expect(request.messages[0].content).toBe('第25条')
-    expect(request.messages[4].content).toBe('第29条')
+    expect(request.messages[0]?.content).toBe('第25条')
+    expect(request.messages[4]?.content).toBe('第29条')
   })
 })
 
@@ -274,12 +274,12 @@ describe('tavern-run 库值防御解析', () => {
       { id: 'card_y', name: '只有名字' },
     ])
     expect(result).toHaveLength(1)
-    expect(result[0].id).toBe('card_y')
-    expect(result[0].name).toBe('只有名字')
-    expect(result[0].description).toBe('')
-    expect(result[0].personality).toBe('')
-    expect(result[0].firstMessage).toBe('')
-    expect(result[0].tags).toEqual([])
+    expect(result[0]?.id).toBe('card_y')
+    expect(result[0]?.name).toBe('只有名字')
+    expect(result[0]?.description).toBe('')
+    expect(result[0]?.personality).toBe('')
+    expect(result[0]?.firstMessage).toBe('')
+    expect(result[0]?.tags).toEqual([])
   })
 
   it('parseCards 非数组返回空', () => {
@@ -292,8 +292,8 @@ describe('tavern-run 库值防御解析', () => {
   it('parseWorldEntries 解析合法条目', () => {
     const result = parseWorldEntries([worldEntry()])
     expect(result).toHaveLength(1)
-    expect(result[0].content).toBe('图书馆的旧怀表会在午夜报出真实时间。')
-    expect(result[0].enabled).toBe(true)
+    expect(result[0]?.content).toBe('图书馆的旧怀表会在午夜报出真实时间。')
+    expect(result[0]?.enabled).toBe(true)
   })
 
   it('parseWorldEntries 丢弃坏数据、enabled 严格布尔、补齐默认值', () => {
@@ -305,14 +305,14 @@ describe('tavern-run 库值防御解析', () => {
     ])
     // 只有非对象/缺 id/缺 content 的条目整条丢弃；enabled 非 true 一律收敛为禁用但保留条目。
     expect(result).toHaveLength(3)
-    expect(result[0].id).toBe('w_x')
-    expect(result[0].enabled).toBe(false)
-    expect(result[1].id).toBe('w_y')
-    expect(result[1].enabled).toBe(false)
-    expect(result[2].id).toBe('w_z')
-    expect(result[2].enabled).toBe(true)
-    expect(result[2].keywords).toBe('关键词')
-    expect(result[2].order).toBe(3)
+    expect(result[0]?.id).toBe('w_x')
+    expect(result[0]?.enabled).toBe(false)
+    expect(result[1]?.id).toBe('w_y')
+    expect(result[1]?.enabled).toBe(false)
+    expect(result[2]?.id).toBe('w_z')
+    expect(result[2]?.enabled).toBe(true)
+    expect(result[2]?.keywords).toBe('关键词')
+    expect(result[2]?.order).toBe(3)
   })
 
   it('parseWorldEntries 非数组返回空', () => {

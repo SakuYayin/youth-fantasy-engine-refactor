@@ -22,7 +22,7 @@ import {
   TAVERN_FREE_PANEL_TEXT,
 } from '../../src/renderer/panels/tavern-free-model.js'
 
-const tavernFreeTab: TabDef = getTab('tavern-free')
+const tavernFreeTab: TabDef = getTab('tavern-free')!
 if (tavernFreeTab === undefined) {
   throw new Error('schema 缺少 tavern-free 页签：测试无法继续')
 }
@@ -341,7 +341,7 @@ describe('tavern-free 视图：发送流程', () => {
     expect(items).toHaveLength(3)
     expect(items[1]!.get('[data-testid="tavern-free-content"]').text()).toBe('第一段写得太平了')
     expect(items[2]!.get('[data-testid="tavern-free-content"]').text()).toBe('收到，我们继续头脑风暴。')
-    expect(harness.wrapper.get('[data-testid="tavern-free-input"]').element.value).toBe('')
+    expect((harness.wrapper.get('[data-testid="tavern-free-input"]').element as HTMLInputElement).value).toBe('')
 
     expect(harness.submitCalls.length).toBeGreaterThan(0)
     expect(harness.submitCalls[0]!.schemaTemplateId).toBe('panel:tavern-free')

@@ -17,7 +17,6 @@ import { getTab } from '@yfe/schema-tabs'
 import type {
   AppSnapshot,
   AppState,
-  SettingsEntityQuery,
   SettingsEntitySubmit,
   SettingsEntitySubmitResult,
   SettingsEntityView,
@@ -121,6 +120,7 @@ function snapshotWith(entities: AppSnapshot['settingsEntities']): AppSnapshot {
     lastSavedAt: null,
     projectId: 'project_1',
     tree: [],
+    documents: [],
     selectedDocumentId: 'doc_1',
     title: '第一章',
     body: '原始正文',
@@ -161,7 +161,7 @@ function harness(entities: AppSnapshot['settingsEntities'], options: HarnessOpti
     complete,
   }
   let snapshot = snapshotWith(entities)
-  const loadQueries: SettingsEntityQuery[] = []
+  const loadQueries: Array<Parameters<AppState['loadSettingsEntities']>[0]> = []
   const submitCalls: SettingsEntitySubmit[] = []
   const submitResult: SettingsEntitySubmitResult =
     options.submitResult ?? { ok: true, entityId: 'entity-panel-1', revision: 'r2', orderKey: 'k' }
@@ -254,13 +254,13 @@ describe('tavern-run 挂载与加载', () => {
     expect(wrapper.get('[data-testid="tavern-run-overview"]').text()).toBe('共 2 条消息')
     const items = wrapper.findAll('[data-testid="tavern-run-message"]')
     expect(items).toHaveLength(2)
-    expect(items[0].text()).toContain('我推开了图书馆的门。')
-    expect(items[1].text()).toContain('（怀表滴答作响）')
-    expect(items[0].classes()).toContain('tavern-run__msg--user')
-    expect(items[1].classes()).toContain('tavern-run__msg--assistant')
-    expect(items[0].get('[data-testid="tavern-run-role"]').text()).toBe('你')
-    expect(items[1].get('[data-testid="tavern-run-role"]').text()).toBe('林晚')
-    expect(items[0].get('[data-testid="tavern-run-time"]').text()).not.toBe('')
+    expect(items[0]?.text()).toContain('我推开了图书馆的门。')
+    expect(items[1]?.text()).toContain('（怀表滴答作响）')
+    expect(items[0]?.classes()).toContain('tavern-run__msg--user')
+    expect(items[1]?.classes()).toContain('tavern-run__msg--assistant')
+    expect(items[0]?.get('[data-testid="tavern-run-role"]').text()).toBe('你')
+    expect(items[1]?.get('[data-testid="tavern-run-role"]').text()).toBe('林晚')
+    expect(items[0]?.get('[data-testid="tavern-run-time"]').text()).not.toBe('')
   })
 
   it('卡片选择：从 tavern-card 行读取卡片列表，cardId 未存时回落第一张', async () => {
@@ -270,8 +270,8 @@ describe('tavern-run 挂载与加载', () => {
     expect((select.element as HTMLSelectElement).value).toBe('card_fixture1')
     const options = select.findAll('option')
     expect(options).toHaveLength(2)
-    expect(options[0].text()).toBe('林晚')
-    expect(options[1].text()).toBe('苏橙')
+    expect(options[0]?.text()).toBe('林晚')
+    expect(options[1]?.text()).toBe('苏橙')
   })
 
   it('无卡片时显示引导且不渲染选择框', async () => {
@@ -317,7 +317,7 @@ describe('tavern-run 发送流程', () => {
     await wrapper.get('[data-testid="tavern-run-send"]').trigger('click')
     await flushPromises()
     expect(complete).toHaveBeenCalledTimes(1)
-    const request = complete.mock.calls[0][0]
+    const request = complete.mock.calls[0]![0]
     expect(request.system).toContain('林晚')
     expect(request.system).toContain('魔法学院二年级学生')
     expect(request.system).toContain('旧怀表会在午夜报时。')
@@ -328,18 +328,18 @@ describe('tavern-run 发送流程', () => {
     // 回复作为 assistant 消息渲染，输入框已清空。
     const items = wrapper.findAll('[data-testid="tavern-run-message"]')
     expect(items).toHaveLength(2)
-    expect(items[1].classes()).toContain('tavern-run__msg--assistant')
-    expect(items[1].text()).toContain('怀表在午夜停了。')
+    expect(items[1]?.classes()).toContain('tavern-run__msg--assistant')
+    expect(items[1]?.text()).toContain('怀表在午夜停了。')
     expect((wrapper.get('[data-testid="tavern-run-input"]').element as HTMLTextAreaElement).value).toBe('')
     // 持久化：schemaTemplateId=panel:tavern-run，values 带两条消息。
     expect(submitCalls.length).toBeGreaterThan(0)
-    const last = submitCalls[submitCalls.length - 1]
+    const last = submitCalls[submitCalls.length - 1]!
     expect(last.schemaTemplateId).toBe('panel:tavern-run')
     expect(last.name).toBe(PANEL_STATE_NAME)
     const values = last.values as unknown as TavernRunPanelValues
     expect(values.messages).toHaveLength(2)
-    expect(values.messages[0].role).toBe('user')
-    expect(values.messages[1].content).toBe('怀表在午夜停了。')
+    expect(values.messages[0]?.role).toBe('user')
+    expect(values.messages[1]?.content).toBe('怀表在午夜停了。')
     expect(values.cardId).toBe('card_fixture1')
   })
 
@@ -427,7 +427,7 @@ describe('tavern-run 发送流程', () => {
     expect(wrapper.get('[data-testid="tavern-run-error"]').text()).toBe('AI_TIMEOUT：请求超时')
     const items = wrapper.findAll('[data-testid="tavern-run-message"]')
     expect(items).toHaveLength(1)
-    expect(items[0].classes()).toContain('tavern-run__msg--user')
+    expect(items[0]?.classes()).toContain('tavern-run__msg--user')
     expect(submitCalls.length).toBeGreaterThan(0)
   })
 
@@ -447,10 +447,10 @@ describe('tavern-run 发送流程', () => {
     await wrapper.get('[data-testid="tavern-run-input"]').setValue('新行动')
     await wrapper.get('[data-testid="tavern-run-send"]').trigger('click')
     await flushPromises()
-    const request = complete.mock.calls[0][0]
+    const request = complete.mock.calls[0]![0]
     expect(request.messages).toHaveLength(20)
-    expect(request.messages[0].content).toBe('第6条')
-    expect(request.messages[19].content).toBe('新行动')
+    expect(request.messages[0]?.content).toBe('第6条')
+    expect(request.messages[19]?.content).toBe('新行动')
   })
 
   it('滚动到底：新消息后容器 scrollTop 跟随 scrollHeight', async () => {
@@ -485,7 +485,7 @@ describe('tavern-run 新建会话与标题', () => {
     expect(wrapper.get('[data-testid="tavern-run-empty"]').text()).toBe(TAVERN_RUN_PANEL_TEXT.empty)
     expect((wrapper.get('[data-testid="tavern-run-title-input"]').element as HTMLInputElement).value).toBe('新会话')
     expect(submitCalls.length).toBeGreaterThan(0)
-    const last = submitCalls[submitCalls.length - 1]
+    const last = submitCalls[submitCalls.length - 1]!
     expect(last.schemaTemplateId).toBe('panel:tavern-run')
     const values = last.values as unknown as TavernRunPanelValues
     expect(values.messages).toHaveLength(0)
@@ -513,7 +513,7 @@ describe('tavern-run 新建会话与标题', () => {
     await title.trigger('blur')
     await flushPromises()
     expect(submitCalls.length).toBeGreaterThan(0)
-    const last = submitCalls[submitCalls.length - 1]
+    const last = submitCalls[submitCalls.length - 1]!
     expect(last.schemaTemplateId).toBe('panel:tavern-run')
     const values = last.values as unknown as TavernRunPanelValues
     expect(values.sessionTitle).toBe('决战魔塔')
@@ -525,7 +525,7 @@ describe('tavern-run 新建会话与标题', () => {
     await flushPromises()
     await wrapper.get('[data-testid="tavern-run-card-select"]').setValue('card_two')
     await flushPromises()
-    const last = submitCalls[submitCalls.length - 1]
+    const last = submitCalls[submitCalls.length - 1]!
     const values = last.values as unknown as TavernRunPanelValues
     expect(values.cardId).toBe('card_two')
   })
