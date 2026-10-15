@@ -140,6 +140,53 @@ export function removeMember(db: ServerDb, workspaceId: WorkspaceId, userId: Use
 }
 
 /**
+ * 成员关系 + 展示用用户名/显示名（`GET /api/v1/workspaces/:workspaceId/members`）。
+ *
+ * 用 LEFT JOIN 而不是 INNER JOIN：外键 `ON DELETE CASCADE` 保证成员行不会指向
+ * 不存在的用户，所以 `null` 只可能来自被人手工改坏的库。这种情况下**不静默丢行**
+ * （丢行会让管理员以为某个成员已经不在），而是抛 `STORAGE_CORRUPT`。
+ *
+ * 这是**纯追加**：既有导出与私有 `toMember` / `RawMemberRow` 的语义都没变。
+ */
+export interface WorkspaceMemberView extends WorkspaceMemberRow {
+  readonly username: string
+  readonly displayName: string
+}
+
+interface RawMemberViewRow extends RawMemberRow {
+  readonly username: string | null
+  readonly display_name: string | null
+}
+
+export function listMemberViews(
+  db: ServerDb,
+  workspaceId: WorkspaceId,
+): readonly WorkspaceMemberView[] {
+  const rows = db
+    .prepare(
+      `SELECT m.workspace_id, m.user_id, m.role, m.created_at,
+              u.username AS username, u.display_name AS display_name
+         FROM ${SERVER_TABLES.workspaceMembers} m
+         LEFT JOIN ${SERVER_TABLES.users} u ON u.id = m.user_id
+        WHERE m.workspace_id = ?
+        ORDER BY m.created_at, m.user_id`,
+    )
+    .all(workspaceId) as RawMemberViewRow[]
+  return rows.map((raw) => {
+    const member = toMember(raw)
+    if (raw.username === null || raw.display_name === null) {
+      throw new ContractError({
+        code: 'STORAGE_CORRUPT',
+        message: '工作区成员关系指向已不存在的用户，数据库内容不符合契约。',
+        requestId: newIds.request(),
+        detail: { workspaceId: raw.workspace_id, userId: raw.user_id },
+      })
+    }
+    return { ...member, username: raw.username, displayName: raw.display_name }
+  })
+}
+
+/**
  * 统计工作区里的 owner 数量。
  *
  * 用途：设计文档 07 要求"最后所有者不可误删"。删除/降级成员前先查这个数，

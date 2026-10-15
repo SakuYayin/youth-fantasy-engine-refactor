@@ -42,6 +42,7 @@ import type { ServerDb } from '../db/open.js'
 import { registerHealthRoutes } from '../http/health.js'
 import type { RateLimiter } from '../http/rateLimit.js'
 import type { PermissionGuards } from '../permission/index.js'
+import { registerAdminUserRoutes } from './adminUsers.js'
 import { registerAssetRoutes } from './assets.js'
 import { registerAuthRoutes } from './auth.js'
 import { registerCapabilitiesRoute } from './capabilities.js'
@@ -49,6 +50,7 @@ import { registerCommandRoutes } from './commands.js'
 import { registerDeviceRoutes } from './devices.js'
 import { registerJobEventRoutes } from './events.js'
 import { registerJobRoutes } from './jobs.js'
+import { registerMemberRoutes } from './members.js'
 import { registerPairingCodeRoutes } from './pairingCodes.js'
 import { registerSetupRoute } from './setup.js'
 import { registerSyncRoutes } from './sync.js'
@@ -137,6 +139,16 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     ...(deps.log === undefined ? {} : { log: deps.log }),
   })
 
+  // 工作区成员：列举 / 添加 / 改角色 / 移除。
+  // `policy` 是处理器内 `authorizeWorkspaceAccess` 需要的（与 devices/sync 同形）。
+  registerMemberRoutes(app, {
+    db: deps.db,
+    policy: deps.policy,
+    now: deps.now,
+    guards: deps.guards,
+    ...(deps.log === undefined ? {} : { log: deps.log }),
+  })
+
   // 同步：快照 / 增量 / 原子批次 / 回执 / 版本历史 / 只读投影。
   registerSyncRoutes(app, {
     db: deps.db,
@@ -220,6 +232,16 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     guards: deps.guards,
     masterKeyFile: deps.masterKeyFile,
     ...(deps.pairingPepper === undefined ? {} : { pepper: deps.pairingPepper }),
+    ...(deps.log === undefined ? {} : { log: deps.log }),
+  })
+
+  // 系统管理面：用户列举 / 改名与停用 / 重置密码。
+  // 管理员身份的唯一来源是 `server_state.owner_user_id`（见 `db/admin.ts` 文件头）：
+  // 请求体里的 `role` / `isAdmin` 一律不参与判定，非管理员是 403 而不是 404。
+  registerAdminUserRoutes(app, {
+    db: deps.db,
+    now: deps.now,
+    guards: deps.guards,
     ...(deps.log === undefined ? {} : { log: deps.log }),
   })
 }

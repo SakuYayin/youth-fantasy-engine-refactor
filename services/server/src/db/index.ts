@@ -116,10 +116,14 @@ export {
   createUser,
   createUserWithMembership,
   findUserById,
+  findUserByUsername,
   findUserWithCredentialByUsername,
   isUniqueViolation,
+  listUsers,
   normalizeUsername,
   setUserDisabled,
+  setUserDisplayName,
+  setUserPasswordHash,
   userExists,
 } from './users.js'
 export type {
@@ -133,12 +137,21 @@ export type {
 export {
   countOwners,
   findMember,
+  listMemberViews,
   listMembers,
   listMemberships,
   removeMember,
   upsertMember,
 } from './members.js'
-export type { WorkspaceMemberRow } from './members.js'
+export type { WorkspaceMemberRow, WorkspaceMemberView } from './members.js'
+
+// --- 系统管理面（系统管理员 = `server_state.owner_user_id`） ---
+export {
+  countEnabledSystemAdminsAfterChange,
+  isSystemAdmin,
+  requireSystemAdmin,
+  systemAdminUserId,
+} from './admin.js'
 
 // --- 会话与刷新凭据 ---
 export {

@@ -204,6 +204,85 @@ export function countUsers(db: ServerDb): number {
   return row.count
 }
 
+// ---------------------------------------------------------------------------
+// 管理面（task-15 / P3-C4）追加：列表、按用户名查、改名、换摘要
+//
+// 这四个函数是**纯追加**：既有导出（含上面的私有 `USER_COLUMNS` / `toUser`）的签名与
+// 语义都没有变。新增的读函数同样**不带 `password_hash`**——管理端看到的用户对象里
+// 永远没有摘要，从类型上就写不出"把摘要放进响应"的代码。
+// ---------------------------------------------------------------------------
+
+/**
+ * 列出全部用户（按创建时间、ID 稳定排序）。
+ *
+ * 用途：`GET /api/v1/admin/users`。**"谁是系统管理员"的判定不在这一层**：
+ * 它来自 `server_state.owner_user_id`（见 `./admin.js`），仓储层不做权限判断——
+ * 否则"谁能读用户表"会散落成第二份真相源。
+ */
+export function listUsers(db: ServerDb): readonly UserRow[] {
+  const rows = db
+    .prepare(`SELECT ${USER_COLUMNS} FROM ${SERVER_TABLES.users} ORDER BY created_at, id`)
+    .all() as RawUserRow[]
+  return rows.map(toUser)
+}
+
+/**
+ * 按用户名（归一化后）查用户，**不带密码摘要**。
+ *
+ * 与 `findUserWithCredentialByUsername` 只差一件事：返回值里没有 `password_hash`。
+ * 加工作区成员时要按用户名定位目标用户，这条路径不需要、也不应该拿到摘要。
+ */
+export function findUserByUsername(db: ServerDb, username: string): UserRow | null {
+  const raw = db
+    .prepare(`SELECT ${USER_COLUMNS} FROM ${SERVER_TABLES.users} WHERE normalized_username = ?`)
+    .get(normalizeUsername(username)) as RawUserRow | undefined
+  return raw === undefined ? null : toUser(raw)
+}
+
+/**
+ * 改显示名。返回是否命中一行（`false` = 用户不存在，调用方按 404 处理）。
+ *
+ * 用户名（`username` / `normalized_username`）**不可改**：它是唯一约束的承载者，
+ * 也是审计与日志里指认主体的稳定键，改名会让历史记录失去指向。
+ */
+export function setUserDisplayName(
+  db: ServerDb,
+  id: UserId,
+  displayName: string,
+  at: UtcTimestamp,
+): boolean {
+  const info = db
+    .prepare(
+      `UPDATE ${SERVER_TABLES.users}
+          SET display_name = ?, updated_at = ?
+        WHERE id = ?`,
+    )
+    .run(displayName, at, id)
+  return info.changes === 1
+}
+
+/**
+ * 换密码摘要（管理端重置密码的**唯一**落库路径）。
+ *
+ * 🔴 入参是**已经算好的摘要**（`hashPassword()` 的输出），不是明文。
+ * 仓储层接触不到明文，也就不可能在日志、审计或错误信息里泄露它。
+ */
+export function setUserPasswordHash(
+  db: ServerDb,
+  id: UserId,
+  passwordHash: string,
+  at: UtcTimestamp,
+): boolean {
+  const info = db
+    .prepare(
+      `UPDATE ${SERVER_TABLES.users}
+          SET password_hash = ?, updated_at = ?
+        WHERE id = ?`,
+    )
+    .run(passwordHash, at, id)
+  return info.changes === 1
+}
+
 /** 驱动唯一约束冲突判定。只看主码，不做文案匹配。 */
 export function isUniqueViolation(thrown: unknown): boolean {
   if (typeof thrown !== 'object' || thrown === null) return false

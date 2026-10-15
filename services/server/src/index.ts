@@ -149,6 +149,18 @@ export {
 } from './permission/deviceAuth.js'
 export type { DeviceAuthContext, DeviceGuards, DevicePreHandler } from './permission/deviceAuth.js'
 
+// --- P3-C4 后端管理面（系统管理员 + 工作区成员） ---
+export { registerAdminUserRoutes } from './routes/adminUsers.js'
+export type { AdminUsersRouteDeps } from './routes/adminUsers.js'
+export { registerMemberRoutes } from './routes/members.js'
+export type { MemberRouteDeps } from './routes/members.js'
+export {
+  countEnabledSystemAdminsAfterChange,
+  isSystemAdmin,
+  requireSystemAdmin,
+  systemAdminUserId,
+} from './db/admin.js'
+
 export {
   CONFIG_ENTITY_TYPE,
   DEFAULT_CHANGES_LIMIT,
