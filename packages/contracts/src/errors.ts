@@ -87,6 +87,18 @@ export const ERROR_CODES = [
   'PLUGIN_ACTIVATION_FAILED',
   'PLUGIN_DISABLED',
 
+  // --- AI：模型调用（面板层） ---
+  // 这一组码由**桌面主进程**产生（渲染层 CSP 禁止联网，模型请求只能走主进程），
+  // 经 IPC 回传给面板。`AI_NOT_CONFIGURED` 是预期分支（还没填模型配置），
+  // 面板必须据此渲染「未配置模型」而不是报错弹窗。
+  'AI_NOT_CONFIGURED',
+  'AI_AUTH_FAILED',
+  'AI_RATE_LIMITED',
+  'AI_TIMEOUT',
+  'AI_UPSTREAM_ERROR',
+  'AI_RESPONSE_MALFORMED',
+  'AI_CANCELLED',
+
   // --- SERVICE：进程级故障 ---
   'SERVICE_UNAVAILABLE',
   'SERVICE_SHUTTING_DOWN',
@@ -136,6 +148,12 @@ const SEVERITY_BY_PREFIX: ReadonlyArray<readonly [string, ErrorSeverity]> = [
   ['SYNC_', 'warn'],
   ['JOB_CANCELLED', 'info'],
   ['JOB_', 'warn'],
+  // --- AI：逐条列出，避免整组被当成同一种严重度 ---
+  ['AI_NOT_CONFIGURED', 'info'],
+  ['AI_CANCELLED', 'info'],
+  ['AI_UPSTREAM_ERROR', 'error'],
+  ['AI_RESPONSE_MALFORMED', 'error'],
+  ['AI_', 'warn'],
   ['PLUGIN_', 'warn'],
   ['SERVICE_', 'error'],
   ['INTERNAL_ERROR', 'error'],

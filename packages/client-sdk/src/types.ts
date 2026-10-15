@@ -15,6 +15,8 @@ import type {
   DocumentGetOutput,
   DocumentTreeInput,
   DocumentTreeOutput,
+  AiCompleteInput,
+  AiCompleteOutput,
   ProjectCreateInput,
   ProjectCreateOutput,
   Result,
@@ -75,6 +77,7 @@ export interface ClientContract {
     readonly input: SettingsEntitySaveInput
     readonly output: SettingsEntitySaveOutput
   }
+  readonly aiComplete: { readonly input: AiCompleteInput; readonly output: AiCompleteOutput }
 }
 
 /** IPC 方法名（= `IPC_METHODS` 的联合）。 */
@@ -102,4 +105,5 @@ export interface RendererClient {
   readonly saveSettingsEntity: (
     input: SettingsEntitySaveInput,
   ) => Promise<Result<SettingsEntitySaveOutput>>
+  readonly aiComplete: (input: AiCompleteInput) => Promise<Result<AiCompleteOutput>>
 }

@@ -26,6 +26,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServiceHost } from './service-host.mjs';
 import { createCloseGuard } from './close-guard.mjs';
+import { createAiClient } from './ai-client.mjs';
 import { collectEditorChecks } from './gui-editor-check.mjs';
 import { rendererDevUrl, isRendererUrl, isExternalUrl, isTrustedSender } from './renderer-policy.mjs';
 import ipcMethodsModule from '../preload/ipc-methods.cjs';
@@ -520,6 +521,8 @@ async function runElectron(flags) {
   log('info', '主进程启动', { appVersion: app.getVersion(), dbPath, electron: process.versions.electron });
 
   const host = createHost(dbPath);
+  // AI 请求只在 main 发（渲染层 CSP connect-src 'none'）；见 src/main/ai-client.mjs。
+  const aiClient = createAiClient();
   const rendererPath = join(HERE, '..', '..', 'dist', 'renderer', 'index.html');
   const devUrl = rendererDevUrl(process.env.YFE_RENDERER_URL, app.isPackaged);
   /** @type {any} */
@@ -546,6 +549,20 @@ async function runElectron(flags) {
       return localFailureEnvelope(method, 'PERMISSION_METHOD_NOT_ALLOWED', `IPC 方法不在白名单: ${String(method)}`);
     }
     const started = Date.now();
+    // AI 方法在 main 本地处理（不进 DB worker）：模型请求需要网络，worker 是 SQLite 专用。
+    if (method === 'aiComplete') {
+      const result = await aiClient.complete(request?.payload ?? null);
+      log('debug', 'IPC 完成', {
+        requestId,
+        method,
+        ok: result.ok === true,
+        ms: Date.now() - started,
+        ...(result.ok === false ? { code: result.code } : {}),
+      });
+      return result.ok === true
+        ? { kind: 'response', requestId, ok: true, method, value: result.value }
+        : localFailureEnvelope(method, result.code, result.message);
+    }
     const result = await host.call(method, request?.payload ?? null);
     log('debug', 'IPC 完成', {
       requestId: result?.ok === false ? result.error?.requestId : requestId,
@@ -725,7 +742,8 @@ async function runElectron(flags) {
         return;
       }
       try {
-        // 优雅停止：先拒绝新任务、等在途事务收尾，再关库（设计文档 04）。
+        // 优雅停止：先中止在飞 AI 请求、拒绝新任务、等在途事务收尾，再关库（设计文档 04）。
+        aiClient.abortAll();
         await host.shutdown();
       } catch (thrown) {
         log('error', '关闭服务时出错', { reason: String(thrown) });

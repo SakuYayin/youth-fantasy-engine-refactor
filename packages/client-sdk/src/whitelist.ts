@@ -21,6 +21,7 @@ export const IPC_METHODS = Object.freeze([
   'listSettingsEntities',
   'getSettingsEntity',
   'saveSettingsEntity',
+  'aiComplete',
 ] as const)
 
 export type IpcMethod = (typeof IPC_METHODS)[number]

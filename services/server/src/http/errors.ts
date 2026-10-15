@@ -108,6 +108,17 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   NETWORK_TLS_FAILED: 503,
   NETWORK_SERVER_ERROR: 503,
 
+  // --- AI 调用（契约 AI_ 组）。服务端首版不发起 AI 请求，但总映射必须穷尽：
+  // 语义对齐网络组——超时 408、限流 429、上游问题 503；
+  // 未配置/取消是调用方自己能解决的，归 400；上游返回畸形按"暂不可用"处理。---
+  AI_NOT_CONFIGURED: 400,
+  AI_AUTH_FAILED: 503,
+  AI_RATE_LIMITED: 429,
+  AI_TIMEOUT: 408,
+  AI_UPSTREAM_ERROR: 503,
+  AI_RESPONSE_MALFORMED: 503,
+  AI_CANCELLED: 400,
+
   // --- 同步协议 ---
   SYNC_PROTOCOL_MISMATCH: 400,
   // 🔴 设计文档与契约测试一致：游标失效走 410（资源保留期结束），不是 404/409。

@@ -37,8 +37,10 @@ describe('ERROR_CODES', () => {
     expect(new Set(ERROR_CODES).size).toBe(ERROR_CODES.length)
   })
 
-  it('数量与设计基线一致（59 个，新增必须是有意为之）', () => {
-    expect(ERROR_CODES.length).toBe(59)
+  it('数量与设计基线一致（66 个，新增必须是有意为之）', () => {
+    // 59 → 66：W7 加 AI_ 组 7 个（渲染层 AI 三件套的传输层码），R-35——这里写死的
+    // 数字必须随有意的新组一起更新，评审点在 diff 里。
+    expect(ERROR_CODES.length).toBe(66)
   })
 
   it('各分类的码数量符合契约（新增码会打破这里的断言，迫使评审）', () => {
@@ -54,6 +56,7 @@ describe('ERROR_CODES', () => {
     expect(countByPrefix('JOB_')).toBe(6)
     expect(countByPrefix('PLUGIN_')).toBe(5)
     expect(countByPrefix('SERVICE_')).toBe(3) // INTERNAL_ERROR / NOT_IMPLEMENTED 无此前缀
+    expect(countByPrefix('AI_')).toBe(7) // W7 渲染层 AI 三件套
     expect(ERROR_CODES).toContain('INTERNAL_ERROR')
     expect(ERROR_CODES).toContain('NOT_IMPLEMENTED')
   })
@@ -77,6 +80,7 @@ describe('ERROR_CODES', () => {
       'JOB_',
       'PLUGIN_',
       'SERVICE_',
+      'AI_',
       'INTERNAL_ERROR',
       'NOT_IMPLEMENTED',
     ]

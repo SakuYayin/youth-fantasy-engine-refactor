@@ -21,6 +21,8 @@
 
 import { countChars } from '@yfe/domain'
 import type {
+  AiCompleteInput,
+  AiCompleteOutput,
   DocumentCreateInput,
   DocumentCreateOutput,
   DocumentGetInput,
@@ -50,6 +52,8 @@ import type {
   WorkspaceId,
 } from '@yfe/contracts'
 
+import { createAiPort } from './ai/ai-port.js'
+import type { AiPort } from './ai/types.js'
 import { LOCAL_WORKSPACE_ID } from '../shared/local-workspace.js'
 import {
   createDraftSession,
@@ -100,6 +104,13 @@ export interface SettingsEntityView {
   readonly orderKey: string
   readonly revision: string
   readonly deleted: boolean
+  /**
+   * 时间戳透传（契约 `Timestamped` 基底）。可选：
+   * 保存后的乐观本地视图只有 `entityId/revision/orderKey`（服务端不回时间戳），
+   * 只有从列表/单条读取回填的实体才带。
+   */
+  readonly createdAt?: string
+  readonly updatedAt?: string
 }
 
 /** `loadSettingsEntities` 的过滤条件。 */
@@ -152,6 +163,8 @@ export interface AppSnapshot {
   readonly lastSavedAt: string | null
   readonly projectId: string | null
   readonly tree: readonly ChapterNodeView[]
+  /** 当前作品的章节摘要列表（`listDocumentTree` 之前为空数组；与 `tree` 同源，直接暴露内部变量）。 */
+  readonly documents: readonly DocumentSummary[]
   readonly selectedDocumentId: string | null
   readonly title: string
   readonly body: string
@@ -187,6 +200,7 @@ export interface RendererClientPort {
   readonly saveSettingsEntity: (
     input: SettingsEntitySaveInput,
   ) => Promise<Result<SettingsEntitySaveOutput>>
+  readonly aiComplete: (input: AiCompleteInput) => Promise<Result<AiCompleteOutput>>
 }
 
 /** 当前作品的记忆位置（渲染层本地存储；Electron 下是 file:// 源的 localStorage）。 */
@@ -242,6 +256,8 @@ export interface AppState {
   refreshSettingsEntity(entityId: string): Promise<boolean>
   /** 新建或更新（`entityId` 缺省 = 新建）。 */
   submitSettingsEntity(submit: SettingsEntitySubmit): Promise<SettingsEntitySubmitResult>
+  /** AI 能力（模型配置 + 一次补全）；模型请求只在 main 进程发。 */
+  readonly ai: AiPort
 }
 
 /**
@@ -260,6 +276,12 @@ const TRANSPORT_DOWN_CODES: ReadonlySet<string> = new Set([
 
 export function createAppState(deps: AppStateDeps): AppState {
   const workspaceId = deps.workspaceId ?? LOCAL_WORKSPACE_ID
+  // AI 端口：配置存 settings_entities（模板 panel:ai-config），请求在 main 进程发。
+  const ai = createAiPort(deps.client, {
+    newRequestId: () => deps.newRequestId() as RequestId,
+    workspaceId: workspaceId as WorkspaceId,
+    projectId: () => (projectId === null ? null : (projectId as ProjectId)),
+  })
 
   let ready = false
   let loading = false
@@ -357,6 +379,7 @@ export function createAppState(deps: AppStateDeps): AppState {
       lastSavedAt,
       projectId,
       tree: buildTree(),
+      documents,
       selectedDocumentId,
       title,
       body,
@@ -524,6 +547,8 @@ export function createAppState(deps: AppStateDeps): AppState {
       orderKey: entity.orderKey,
       revision: String(entity.revision),
       deleted: entity.deleted !== 0,
+      createdAt: entity.createdAt,
+      updatedAt: entity.updatedAt,
     }
   }
 
@@ -880,5 +905,7 @@ export function createAppState(deps: AppStateDeps): AppState {
       session = null
       listeners.clear()
     },
+
+    ai,
   }
 }

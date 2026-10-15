@@ -18,6 +18,7 @@ const IPC_METHODS = Object.freeze([
   'saveDraft', 'listDocumentTree', 'getDocument',
   'createProject', 'createDocument', 'systemStatus',
   'listSettingsEntities', 'getSettingsEntity', 'saveSettingsEntity',
+  'aiComplete',
 ]);
 
 const IPC_CHANNEL = 'yfe:invoke';

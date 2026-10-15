@@ -16,6 +16,7 @@ declare const ipcMethodsModule: {
     'listSettingsEntities',
     'getSettingsEntity',
     'saveSettingsEntity',
+    'aiComplete',
   ];
 };
 

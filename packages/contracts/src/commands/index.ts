@@ -303,3 +303,49 @@ export interface PageResult<T> {
   /** 下一页游标；null 表示已到末尾。**不得数值化**。 */
   readonly nextCursor: Cursor | null
 }
+
+// ---------------------------------------------------------------------------
+// AI（面板层，桌面主进程执行模型请求）
+// ---------------------------------------------------------------------------
+
+/**
+ * 一条对话消息。
+ *
+ * `role` 刻意只留 `user` / `assistant`：system 走独立字段（OpenAI 兼容接口的
+ * `messages[0].role === 'system'` 由主进程拼装），面板层不自己拼系统消息。
+ */
+export interface AiMessage {
+  readonly role: 'user' | 'assistant'
+  readonly content: string
+}
+
+/**
+ * 一次模型补全请求（渲染层 → 主进程）。
+ *
+ * 🔴 模型请求只能在 main 进程发（渲染层 CSP `connect-src 'none'`），
+ *    因此 `config` 里的 `apiKey` 会经过 IPC——IPC 是本机进程间通道，
+ *    但 `apiKey` 仍属敏感值：**绝不进日志、错误载荷与导出**（11:44）。
+ */
+export interface AiCompleteInput {
+  /** OpenAI 兼容端点（如 `https://api.openai.com/v1`），必须 http(s)。 */
+  readonly config: {
+    readonly baseUrl: string
+    readonly apiKey: string
+    readonly model: string
+    readonly temperature?: number
+    readonly maxTokens?: number
+    /** 单次请求超时（毫秒）；缺省由主进程决定（长生成要远大于 IPC 默认 15s）。 */
+    readonly timeoutMs?: number
+  }
+  readonly system?: string
+  readonly messages: readonly AiMessage[]
+}
+
+export interface AiCompleteOutput {
+  readonly text: string
+  readonly model?: string
+  readonly usage?: {
+    readonly promptTokens?: number
+    readonly completionTokens?: number
+  }
+}

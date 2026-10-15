@@ -1,4 +1,6 @@
 import type {
+  AiCompleteInput,
+  AiCompleteOutput,
   DocumentCreateInput,
   DocumentGetInput,
   DocumentTreeInput,
@@ -26,6 +28,8 @@ export const IPC_METHODS = [
   'listSettingsEntities',
   'getSettingsEntity',
   'saveSettingsEntity',
+  // AI 走主进程：渲染层 CSP 是 connect-src 'none'，模型请求只能在 main 里发。
+  'aiComplete',
 ] as const;
 
 export type IpcMethod = (typeof IPC_METHODS)[number];
@@ -41,6 +45,7 @@ export interface IpcRequestMap {
   listSettingsEntities: SettingsEntityListInput;
   getSettingsEntity: SettingsEntityGetInput;
   saveSettingsEntity: SettingsEntitySaveInput;
+  aiComplete: AiCompleteInput;
 }
 
 /** method → 响应 value 类型。systemStatus 直接返回 SystemStatusOutput，其余返回契约输出对象。 */
@@ -54,4 +59,5 @@ export interface IpcResponseMap {
   listSettingsEntities: unknown;
   getSettingsEntity: unknown;
   saveSettingsEntity: unknown;
+  aiComplete: AiCompleteOutput;
 }

@@ -21,6 +21,7 @@ const IPC_METHODS = Object.freeze([
   'listSettingsEntities',
   'getSettingsEntity',
   'saveSettingsEntity',
+  'aiComplete',
 ]);
 
 module.exports = { IPC_METHODS };

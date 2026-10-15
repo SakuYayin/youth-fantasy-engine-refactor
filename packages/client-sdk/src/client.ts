@@ -10,6 +10,8 @@
  */
 import { err, type ErrorPayload, type Result } from '@yfe/contracts'
 import type {
+  AiCompleteInput,
+  AiCompleteOutput,
   DocumentCreateInput,
   DocumentCreateOutput,
   DocumentGetInput,
@@ -176,6 +178,7 @@ function createRendererClient(invoke: RawInvoke): RendererClient {
       invoke('getSettingsEntity', input) as Promise<Result<SettingsEntityGetOutput>>,
     saveSettingsEntity: (input: SettingsEntitySaveInput) =>
       invoke('saveSettingsEntity', input) as Promise<Result<SettingsEntitySaveOutput>>,
+    aiComplete: (input: AiCompleteInput) => invoke('aiComplete', input) as Promise<Result<AiCompleteOutput>>,
   }
 }
 

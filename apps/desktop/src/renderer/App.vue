@@ -18,6 +18,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import type { AppSnapshot, AppState } from './app-state.js'
 import { createCodeMirrorAdapter, type CodeMirrorAdapter } from './editor/codemirror-adapter.js'
 import type { EntityRow } from './schema/entity-row.js'
+import { resolvePanelComponent } from './panels/registry.js'
 import {
   TabCardView,
   TabFormView,
@@ -49,6 +50,10 @@ const isEditorTab = computed(() => activeTab.value === null || activeTab.value.t
 /** 设定实体行：`app-state` 的 `SettingsEntityView` 是渲染器 `EntityRow` 的超集（见 `schema/entity-row.ts`）。 */
 const entityRows = computed<readonly EntityRow[]>(() => snapshot.value.settingsEntities)
 const settingsBusy = computed(() => snapshot.value.settingsLoading)
+// 专属面板分派：registry 未登记的 id 回落占位组件（W7 逐个接入）。
+const activePanel = computed(() =>
+  activeTab.value === null || isEditorTab.value ? null : resolvePanelComponent(activeTab.value.id),
+)
 
 /** 组件层还没有的能力（删除 / 重排）在这里给作者一句明确回执，而不是让按钮静默失效。 */
 const notice = ref('')
@@ -327,8 +332,14 @@ function onTakeExternal(): void {
               @update="onUpdateEntity"
               @delete="onDeleteEntity"
             />
+            <component
+              :is="activePanel"
+              v-else-if="activeTab !== null"
+              :state="state"
+              :tab="activeTab"
+            />
             <p v-else class="app__hint">
-              「{{ activeTab?.name ?? '' }}」是专属面板，还没有实现（W7 逐个落地）。
+              尚未选择任何页签。
             </p>
           </div>
         </template>
