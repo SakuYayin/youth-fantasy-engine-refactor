@@ -421,10 +421,35 @@ async function runElectron(flags) {
     });
   }
 
+  /**
+   * 开发模式的渲染层地址（`vite dev` 的 http 地址）。
+   *
+   * 生产绝不允许指向 http：`index.html` 的 CSP 与 `will-navigate` 白名单
+   * 都假定产物来自本地文件。没配或配了空串就走构建产物。
+   */
+  function readRendererDevUrl() {
+    const value = process.env.YFE_RENDERER_URL;
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed === '' ? null : trimmed;
+  }
+
+  let rendererOrigin = 'file://';
   mainWindow = createMainWindow();
   if (mainWindow) {
-    // renderer 目前是占位页（框架选型见 docs/移动端技术栈选型.md）；加载失败只记日志。
-    mainWindow.loadFile(join(HERE, '..', 'renderer', 'index.html')).catch((thrown) => {
+    const devUrl = readRendererDevUrl();
+    if (devUrl !== null) {
+      try {
+        rendererOrigin = new URL(devUrl).origin;
+      } catch {
+        log('warn', 'YFE_RENDERER_URL 不是合法 URL，将按生产路径加载', { url: devUrl });
+      }
+    }
+    const loading =
+      devUrl === null
+        ? mainWindow.loadFile(join(HERE, '..', '..', 'dist', 'renderer', 'index.html'))
+        : mainWindow.loadURL(devUrl);
+    loading.catch((thrown) => {
       log('warn', 'renderer 加载失败', { reason: String(thrown) });
     });
   }
@@ -436,12 +461,12 @@ async function runElectron(flags) {
     }
   });
   app.on('web-contents-created', (_event, contents) => {
-    // 禁止渲染进程跳转到任意来源
+    // 禁止渲染进程跳转到任意来源：只允许本地文件，以及开发模式显式配置的那个源。
     contents.on('will-navigate', (event, url) => {
-      if (!url.startsWith('file://')) {
-        event.preventDefault();
-        log('warn', '已阻止 renderer 导航', { url });
-      }
+      if (url.startsWith('file://')) return;
+      if (rendererOrigin !== 'file://' && url.startsWith(rendererOrigin)) return;
+      event.preventDefault();
+      log('warn', '已阻止 renderer 导航', { url });
     });
   });
   app.on('window-all-closed', () => {

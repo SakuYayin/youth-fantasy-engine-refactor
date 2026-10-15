@@ -21,13 +21,19 @@
   },
   "dependencies": {
     "@yfe/application": "*",
+    "@yfe/client-sdk": "*",
     "@yfe/contracts": "*",
     "@yfe/domain": "*",
-    "@yfe/persistence-sqlite": "*"
+    "@yfe/persistence-sqlite": "*",
+    "@yfe/ui": "*",
+    "codemirror": "^6.0.2",
+    "vue": "^3.5.44"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "self-check": "node src/main/main.mjs --self-check"
+    "self-check": "node src/main/main.mjs --self-check",
+    "dev:renderer": "vite --config vite.config.ts",
+    "build:renderer": "vite build --config vite.config.ts"
   }
 }

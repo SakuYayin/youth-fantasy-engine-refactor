@@ -3,38 +3,22 @@
   <head>
     <meta charset="utf-8" />
     <!--
-      🔴 CSP 必须写死在这里：renderer 是沙箱化的，禁止内联脚本与远程脚本。
-      占位页不引任何外部资源；接入真实框架后也不得放宽 script-src。
+      安全发布会（设计文档 02）：只加载打包产物、禁止任意导航与新窗口。
+      CSP 不允许放宽：
+      - script-src 'self'：只跑同源打包脚本；Vite 产物用相对路径因此仍然是 'self'。
+      - style-src 'unsafe-inline'：Vue 的 scoped 样式与 CodeMirror 都会注入 <style>，这个放宽是必要的。
+      - connect-src 'none'：渲染层不直接联网，一切数据走 preload 白名单 IPC。
+      - img-src 'self' data:：插件图标与数据 URL 缩略图。
+      ⚠️ 若开 vite dev，HMR 的 WebSocket 会被 connect-src 挡掉（页面仍可用）。
     -->
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'"
     />
-    <title>青春幻想引擎 · 占位页</title>
-    <style>
-      :root { color-scheme: dark; }
-      body {
-        margin: 0; padding: 32px;
-        font: 14px/1.7 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-        background: #111318; color: #e6e8ee;
-      }
-      h1 { font-size: 18px; margin: 0 0 4px; }
-      p.sub { color: #8b93a7; margin: 0 0 24px; }
-      pre {
-        background: #1a1d25; border: 1px solid #2a2f3a; border-radius: 8px;
-        padding: 14px 16px; overflow: auto; max-height: 60vh;
-        font-family: Consolas, "Cascadia Mono", monospace; font-size: 12.5px;
-      }
-      .ok { color: #5ddc9a; } .bad { color: #ff7b72; } .dim { color: #8b93a7; }
-    </style>
+    <title>青春幻想引擎</title>
   </head>
   <body>
-    <h1>青春幻想引擎 · 桌面宿主占位页</h1>
-    <p class="sub">
-      本页只验证「renderer → preload 白名单 → main → db-worker → SQLite」这条链路是否打通。
-      真实界面框架的选型见 <code>docs/移动端技术栈选型.md</code>（需兼容移动端）。
-    </p>
-    <pre id="out">正在探测…</pre>
-    <script src="./renderer.js"></script>
+    <div id="app"></div>
+    <script type="module" src="./main.ts"></script>
   </body>
 </html>

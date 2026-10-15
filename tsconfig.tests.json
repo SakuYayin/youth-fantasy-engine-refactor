@@ -1,5 +1,5 @@
 {
-  "//": "测试文件类型检查（补门禁盲区）。背景：每个包的 tsconfig.json 都是 rootDir:'src' + include:['src/**/*.ts']，因此 `npx tsc --noEmit -p packages/<pkg>/tsconfig.json` 永远看不到 tests/**。后果：测试里写错类型（例如断言契约中不存在的字段）不会被任何门禁发现。本配置把全仓 tests/ 纳入同等的 strict 检查。用法：npm run typecheck:tests",
+  "//": "测试文件类型检查（补门禁盲区）。背景：每个包的 tsconfig.json 都是 rootDir:'src' + include:['src/**/*.ts']，因此 `npx tsc --noEmit -p packages/<pkg>/tsconfig.json` 永远看不到 tests/**。后果：测试里写错类型（例如断言契约中不存在的字段）不会被任何门禁发现。本配置把全仓 tests/ 纳入同等的 strict 检查。用法：npm run typecheck:tests。lib 必须含 DOM：测试会 import 渲染层源码（apps/desktop/tests/editor-adapter.test.ts → codemirror-adapter.ts），只有 ES2023 时会报 TS2304 Cannot find name 'HTMLElement'（client-sdk-bot 交付时实测 8 处）。注意：不许在 compilerOptions 里写 '//xxx' 说明键——TS 会报 TS5025 Unknown compiler option（Lead 曾因此把全仓门禁弄红，ui-bot 抓到）。",
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
@@ -9,7 +9,8 @@
     "composite": false,
     "incremental": false,
     "rootDir": ".",
-    "types": ["node"]
+    "types": ["node"],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },
   "include": [
     "packages/*/tests/**/*.ts",

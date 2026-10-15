@@ -367,10 +367,16 @@ export class DraftSession {
       return;
     }
 
-    // 迟到/重复结果：它属于已经结算过的某次保存，不得推进 revision，也不得把新正文标记为已保存。
-    if (outcome.draftSequence <= this.lastSettledSequence) {
+    // 迟到结果：它属于比当前在途更早的一次保存（例如 take-external 之后又开始了新保存），
+    // 不得推进 revision，也不得把新正文标记为已保存。
+    //
+    // 判据必须是「比在途更早」，**不能**是「≤ 已结算序号」：失败结算同样会推进
+    // lastSettledSequence，而失败后 retry 用的还是同一个草稿序号——按已结算判定会把重试的
+    // 成功结果当成迟到结果丢掉，inFlight 再也清不掉，会话永久卡在 saving，
+    // 用户此后敲什么都存不进去（回归用例：draft-session.test.ts 的 retry 用同一序号）。
+    if (outcome.draftSequence < flight.sequence) {
       this.ignoredResults += 1;
-      this.diagnose('warn', `丢弃迟到结果（序号 ${outcome.draftSequence} ≤ 已结算 ${this.lastSettledSequence}）`);
+      this.diagnose('warn', `丢弃迟到结果（序号 ${outcome.draftSequence} < 在途 ${flight.sequence}）`);
       this.refresh();
       return;
     }

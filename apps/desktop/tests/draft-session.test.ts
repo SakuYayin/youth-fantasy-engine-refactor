@@ -214,7 +214,8 @@ describe('草稿会话状态机', () => {
 
     // IPC 边界上「同一个保存请求」的 promise 只会结算一次，重复 resolve 是空操作：
     // 不得回退版本、不得把 v2 标成已保存，也不得污染丢弃计数。
-    // （真·迟到/重复结果走 `<= lastSettledSequence` 分支，由下面 take-external 用例覆盖。）
+    // （真·迟到结果——比在途更早的序号——由下面 take-external 用例覆盖；
+    //  序号相同的结果永远属于当前在途，必须被接受。）
     const stale = h.pending[0];
     if (stale === undefined) throw new Error('缺少第一个在途保存');
     stale.resolve({ ok: true, draftSequence: 1, revision: 'rev-1-late' });
@@ -317,7 +318,7 @@ describe('草稿会话状态机', () => {
     }
   });
 
-  it('失败后 retry 立即重派而不等防抖窗口', async () => {
+  it('失败后 retry 立即重派而不等防抖窗口，且同一序号的成功结果必须被接受', async () => {
     const h = createHarness({ debounceMs: 800 });
 
     h.type('正文');
@@ -329,6 +330,16 @@ describe('草稿会话状态机', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(h.requests).toHaveLength(2);
     expect(h.requests[1]?.body).toBe('正文');
+    // 重试用的是**同一个草稿序号**：失败结算不能把该序号算作"已结算"，
+    // 否则下面这条成功结果会被当成迟到结果丢掉，会话永久卡在 saving。
+    expect(h.requests[1]?.draftSequence).toBe(h.requests[0]?.draftSequence);
+
+    await h.settle(1, { ok: true, revision: 'rev-1' });
+    const s = h.session.getSnapshot();
+    expect(s.status).toBe('saved');
+    expect(s.hasUnsavedChanges).toBe(false);
+    expect(s.revision).toBe('rev-1');
+    expect(s.ignoredResults).toBe(0);
   });
 
   it('flush 立即派发并等待目标序号的结果（切章/退出前冲刷）', async () => {

@@ -1,0 +1,24 @@
+{
+  "name": "@yfe/ui",
+  "version": "4.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "description": "Vue 基础组件与设计令牌（不含业务逻辑）",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./tokens": {
+      "types": "./src/tokens.ts",
+      "default": "./src/tokens.ts"
+    }
+  },
+  "dependencies": {
+    "vue": "^3.5.44"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  }
+}

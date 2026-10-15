@@ -1,0 +1,20 @@
+{
+  "name": "@yfe/client-sdk",
+  "version": "4.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "description": "IPC/HTTP 客户端与错误适配（无 DOM、无 Electron、无 Vue）",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@yfe/contracts": "*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  }
+}

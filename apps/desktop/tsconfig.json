@@ -9,11 +9,15 @@
     "declarationMap": false,
     "incremental": false,
     "allowJs": true,
-    "checkJs": false
+    "checkJs": false,
+    // 渲染层需要 DOM 类型；tsconfig.base.json 只给 ES2023（那是给纯逻辑包用的）。
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "preserve"
   },
   "include": [
     "src/**/*.ts",
-    "src/**/*.mjs"
+    "src/**/*.mjs",
+    "src/**/*.d.ts"
   ],
   "exclude": [
     "dist",
