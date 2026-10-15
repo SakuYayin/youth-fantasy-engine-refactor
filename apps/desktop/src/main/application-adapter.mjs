@@ -59,10 +59,13 @@ import {
   getDocument as readDocument,
   getSettingsEntity as readSettingsEntity,
   listDocumentTree as readDocumentTree,
+  listProjects as readProjects,
   listSettingsEntities as readSettingsEntities,
   listSettingsEntitiesInWorkspace as readSettingsEntitiesInWorkspace,
+  renameProject,
   reorderDocument,
   softDeleteDocument,
+  softDeleteProject,
   updateDocumentTitle,
   updateSettingsEntity,
 } from '@yfe/persistence-sqlite/repositories';
@@ -245,6 +248,56 @@ export function createSqliteApplicationPorts({ db, ids, revisions, describeDatab
           return ok({ revision: written.value.revision });
         } catch (thrown) {
           return errorResult(thrown, requestId, '新建作品失败');
+        }
+      },
+
+      /** 列出工作区内的作品：repository 已按 workspaceId 过滤（跨工作区返回 PERMISSION_*）。 */
+      async listProjects(request) {
+        const requestId = request?.context?.requestId;
+        try {
+          const listed = readProjects(db, request.context, {
+            includeDeleted: request.includeDeleted === true,
+          });
+          if (!listed.ok) return listed;
+          return ok(listed.value);
+        } catch (thrown) {
+          return errorResult(thrown, requestId, '列出作品失败');
+        }
+      },
+
+      /** 重命名作品：CAS 乐观锁在 repository（`WHERE id AND revision`）。 */
+      async updateProject(request) {
+        const requestId = request?.context?.requestId;
+        try {
+          const written = renameProject(db, request.context, request.projectId, request.name, {
+            clock: clockAt(request.occurredAt),
+            rng: cryptoRandomSource,
+            revisionGenerator: revisions,
+          });
+          if (!written.ok) return written;
+          return ok({ revision: written.value.revision });
+        } catch (thrown) {
+          return errorResult(thrown, requestId, '重命名作品失败');
+        }
+      },
+
+      /**
+       * 软删作品：只标记作品行，**不级联**子文档（与 repository 一致：可见性由作品决定）。
+       * 端口承诺 `ProjectDeleteResult{revision, deletedCount}`，repository 只回 revision
+       * ⇒ 本次调用真正标记的行数恒为 1（没有级联就没有更多行）。
+       */
+      async deleteProject(request) {
+        const requestId = request?.context?.requestId;
+        try {
+          const written = softDeleteProject(db, request.context, request.projectId, {
+            clock: clockAt(request.occurredAt),
+            rng: cryptoRandomSource,
+            revisionGenerator: revisions,
+          });
+          if (!written.ok) return written;
+          return ok({ revision: written.value.revision, deletedCount: 1 });
+        } catch (thrown) {
+          return errorResult(thrown, requestId, '删除作品失败');
         }
       },
     },

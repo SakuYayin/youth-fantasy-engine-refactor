@@ -12,6 +12,13 @@ import { err, type ErrorPayload, type Result } from '@yfe/contracts'
 import type {
   AiCompleteInput,
   AiCompleteOutput,
+  BackupCreateInput,
+  BackupCreateOutput,
+  BackupListOutput,
+  BackupRestoreInput,
+  BackupRestoreOutput,
+  BackupVerifyInput,
+  BackupVerifyOutput,
   DocumentCreateInput,
   DocumentCreateOutput,
   DocumentDeleteInput,
@@ -24,6 +31,12 @@ import type {
   DocumentUpdateOutput,
   ProjectCreateInput,
   ProjectCreateOutput,
+  ProjectDeleteInput,
+  ProjectDeleteOutput,
+  ProjectListInput,
+  ProjectListOutput,
+  ProjectUpdateInput,
+  ProjectUpdateOutput,
   SaveDraftInput,
   SaveDraftOutput,
   SettingsEntityGetInput,
@@ -173,12 +186,25 @@ function createRendererClient(invoke: RawInvoke): RendererClient {
     getDocument: (input: DocumentGetInput) => invoke('getDocument', input) as Promise<Result<DocumentGetOutput>>,
     createProject: (input: ProjectCreateInput) =>
       invoke('createProject', input) as Promise<Result<ProjectCreateOutput>>,
+    listProjects: (input: ProjectListInput) =>
+      invoke('listProjects', input) as Promise<Result<ProjectListOutput>>,
+    updateProject: (input: ProjectUpdateInput) =>
+      invoke('updateProject', input) as Promise<Result<ProjectUpdateOutput>>,
+    deleteProject: (input: ProjectDeleteInput) =>
+      invoke('deleteProject', input) as Promise<Result<ProjectDeleteOutput>>,
     createDocument: (input: DocumentCreateInput) =>
       invoke('createDocument', input) as Promise<Result<DocumentCreateOutput>>,
     updateDocument: (input: DocumentUpdateInput) =>
       invoke('updateDocument', input) as Promise<Result<DocumentUpdateOutput>>,
     deleteDocument: (input: DocumentDeleteInput) =>
       invoke('deleteDocument', input) as Promise<Result<DocumentDeleteOutput>>,
+    backupCreate: (input: BackupCreateInput) =>
+      invoke('backupCreate', input) as Promise<Result<BackupCreateOutput>>,
+    backupList: () => invoke('backupList', null) as Promise<Result<BackupListOutput>>,
+    backupVerify: (input: BackupVerifyInput) =>
+      invoke('backupVerify', input) as Promise<Result<BackupVerifyOutput>>,
+    backupRestore: (input: BackupRestoreInput) =>
+      invoke('backupRestore', input) as Promise<Result<BackupRestoreOutput>>,
     systemStatus: () => invoke('systemStatus', null) as Promise<Result<SystemStatusOutput>>,
     listSettingsEntities: (input: SettingsEntityListInput) =>
       invoke('listSettingsEntities', input) as Promise<Result<SettingsEntityListOutput>>,

@@ -9,6 +9,13 @@
  * 依赖只有 `@yfe/contracts`：不得 import DOM / Electron / Vue / `node:`（ADR 0006 D2 第 6 条）。
  */
 import type {
+  BackupCreateInput,
+  BackupCreateOutput,
+  BackupListOutput,
+  BackupRestoreInput,
+  BackupRestoreOutput,
+  BackupVerifyInput,
+  BackupVerifyOutput,
   DocumentCreateInput,
   DocumentCreateOutput,
   DocumentDeleteInput,
@@ -23,6 +30,12 @@ import type {
   AiCompleteOutput,
   ProjectCreateInput,
   ProjectCreateOutput,
+  ProjectDeleteInput,
+  ProjectDeleteOutput,
+  ProjectListInput,
+  ProjectListOutput,
+  ProjectUpdateInput,
+  ProjectUpdateOutput,
   Result,
   SaveDraftInput,
   SaveDraftOutput,
@@ -67,9 +80,16 @@ export interface ClientContract {
   readonly listDocumentTree: { readonly input: DocumentTreeInput; readonly output: DocumentTreeOutput }
   readonly getDocument: { readonly input: DocumentGetInput; readonly output: DocumentGetOutput }
   readonly createProject: { readonly input: ProjectCreateInput; readonly output: ProjectCreateOutput }
+  readonly listProjects: { readonly input: ProjectListInput; readonly output: ProjectListOutput }
+  readonly updateProject: { readonly input: ProjectUpdateInput; readonly output: ProjectUpdateOutput }
+  readonly deleteProject: { readonly input: ProjectDeleteInput; readonly output: ProjectDeleteOutput }
   readonly createDocument: { readonly input: DocumentCreateInput; readonly output: DocumentCreateOutput }
   readonly updateDocument: { readonly input: DocumentUpdateInput; readonly output: DocumentUpdateOutput }
   readonly deleteDocument: { readonly input: DocumentDeleteInput; readonly output: DocumentDeleteOutput }
+  readonly backupCreate: { readonly input: BackupCreateInput; readonly output: BackupCreateOutput }
+  readonly backupList: { readonly input: null; readonly output: BackupListOutput }
+  readonly backupVerify: { readonly input: BackupVerifyInput; readonly output: BackupVerifyOutput }
+  readonly backupRestore: { readonly input: BackupRestoreInput; readonly output: BackupRestoreOutput }
   readonly systemStatus: { readonly input: null; readonly output: SystemStatusOutput }
   readonly listSettingsEntities: {
     readonly input: SettingsEntityListInput
@@ -100,9 +120,16 @@ export interface RendererClient {
   readonly listDocumentTree: (input: DocumentTreeInput) => Promise<Result<DocumentTreeOutput>>
   readonly getDocument: (input: DocumentGetInput) => Promise<Result<DocumentGetOutput>>
   readonly createProject: (input: ProjectCreateInput) => Promise<Result<ProjectCreateOutput>>
+  readonly listProjects: (input: ProjectListInput) => Promise<Result<ProjectListOutput>>
+  readonly updateProject: (input: ProjectUpdateInput) => Promise<Result<ProjectUpdateOutput>>
+  readonly deleteProject: (input: ProjectDeleteInput) => Promise<Result<ProjectDeleteOutput>>
   readonly createDocument: (input: DocumentCreateInput) => Promise<Result<DocumentCreateOutput>>
   readonly updateDocument: (input: DocumentUpdateInput) => Promise<Result<DocumentUpdateOutput>>
   readonly deleteDocument: (input: DocumentDeleteInput) => Promise<Result<DocumentDeleteOutput>>
+  readonly backupCreate: (input: BackupCreateInput) => Promise<Result<BackupCreateOutput>>
+  readonly backupList: () => Promise<Result<BackupListOutput>>
+  readonly backupVerify: (input: BackupVerifyInput) => Promise<Result<BackupVerifyOutput>>
+  readonly backupRestore: (input: BackupRestoreInput) => Promise<Result<BackupRestoreOutput>>
   readonly systemStatus: () => Promise<Result<SystemStatusOutput>>
   readonly listSettingsEntities: (
     input: SettingsEntityListInput,

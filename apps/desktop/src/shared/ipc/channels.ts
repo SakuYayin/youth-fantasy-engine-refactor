@@ -1,12 +1,24 @@
 import type {
   AiCompleteInput,
   AiCompleteOutput,
+  BackupCreateInput,
+  BackupCreateOutput,
+  BackupListOutput,
+  BackupRestoreInput,
+  BackupRestoreOutput,
+  BackupVerifyInput,
+  BackupVerifyOutput,
   DocumentCreateInput,
   DocumentDeleteInput,
   DocumentGetInput,
   DocumentTreeInput,
   DocumentUpdateInput,
   ProjectCreateInput,
+  ProjectDeleteInput,
+  ProjectListInput,
+  ProjectListOutput,
+  ProjectUpdateInput,
+  ProjectUpdateOutput,
   SaveDraftInput,
   SettingsEntityGetInput,
   SettingsEntityListInput,
@@ -25,9 +37,17 @@ export const IPC_METHODS = [
   'listDocumentTree',
   'getDocument',
   'createProject',
+  'listProjects',
+  'updateProject',
+  'deleteProject',
   'createDocument',
   'updateDocument',
   'deleteDocument',
+  // 备份/恢复：路径由主进程决定（渲染层不传任意路径），见 backup-adapter.mjs
+  'backupCreate',
+  'backupList',
+  'backupVerify',
+  'backupRestore',
   'systemStatus',
   'listSettingsEntities',
   'getSettingsEntity',
@@ -44,9 +64,16 @@ export interface IpcRequestMap {
   listDocumentTree: DocumentTreeInput;
   getDocument: DocumentGetInput;
   createProject: ProjectCreateInput;
+  listProjects: ProjectListInput;
+  updateProject: ProjectUpdateInput;
+  deleteProject: ProjectDeleteInput;
   createDocument: DocumentCreateInput;
   updateDocument: DocumentUpdateInput;
   deleteDocument: DocumentDeleteInput;
+  backupCreate: BackupCreateInput;
+  backupList: null;
+  backupVerify: BackupVerifyInput;
+  backupRestore: BackupRestoreInput;
   systemStatus: null;
   listSettingsEntities: SettingsEntityListInput;
   getSettingsEntity: SettingsEntityGetInput;
@@ -60,9 +87,16 @@ export interface IpcResponseMap {
   listDocumentTree: unknown;
   getDocument: unknown;
   createProject: unknown;
+  listProjects: ProjectListOutput;
+  updateProject: ProjectUpdateOutput;
+  deleteProject: { projectId: string; revision: string };
   createDocument: unknown;
   updateDocument: unknown;
   deleteDocument: unknown;
+  backupCreate: BackupCreateOutput;
+  backupList: BackupListOutput;
+  backupVerify: BackupVerifyOutput;
+  backupRestore: BackupRestoreOutput;
   systemStatus: SystemStatusOutput;
   listSettingsEntities: unknown;
   getSettingsEntity: unknown;

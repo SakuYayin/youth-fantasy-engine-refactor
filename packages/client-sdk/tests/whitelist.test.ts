@@ -15,15 +15,26 @@ describe('IPC 白名单一致性（防止副本漂移）', () => {
     expect([...CLIENT_METHODS]).toEqual([...preloadMethodsModule.IPC_METHODS])
   })
 
-  it('与 ADR 0006 D2 的方法表逐字一致（含 W6 设定实体三方法、W7 的 aiComplete 与章节管理两方法），且副本被冻结、无重复', () => {
+  // 🔴 下面这份字面量是**顺序契约**，不是数量契约：前两个用例只保证「五份副本彼此相等」，
+  // 若有人把方法顺序在所有副本里一起改掉，它们会一起变绿。这里逐项写死是为了锁住
+  // ADR 0006 D2 的层序（草稿/树/文档 → 作品 → 章节 → 备份 → 系统 → 设定 → AI）。
+  // 新增方法时**必须**同步改这里，且要改的是方法名（别再写「N 个方法」这类会过期的措辞，R-72）。
+  it('与 ADR 0006 D2 的方法表逐字一致（含作品/备份七方法与顺序契约），且副本被冻结、无重复', () => {
     expect([...CLIENT_METHODS]).toEqual([
       'saveDraft',
       'listDocumentTree',
       'getDocument',
       'createProject',
+      'listProjects',
+      'updateProject',
+      'deleteProject',
       'createDocument',
       'updateDocument',
       'deleteDocument',
+      'backupCreate',
+      'backupList',
+      'backupVerify',
+      'backupRestore',
       'systemStatus',
       'listSettingsEntities',
       'getSettingsEntity',

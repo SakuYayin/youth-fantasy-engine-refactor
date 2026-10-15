@@ -96,6 +96,9 @@ const {
   systemRevisionGenerator,
   saveDraft: saveDraftUseCase,
   createProject: createProjectUseCase,
+  listProjects: listProjectsUseCase,
+  updateProject: updateProjectUseCase,
+  deleteProject: deleteProjectUseCase,
   createDocument: createDocumentUseCase,
   getDocument: getDocumentUseCase,
   updateDocument: updateDocumentUseCase,
@@ -110,6 +113,7 @@ const {
 // 组装点适配器（把 application 的端口接到 persistence 的具体驱动）：
 // 它内部含静态的 `@yfe/*` 导入，所以必须等上面的解析钩子就位后再动态引入。
 const { createSqliteApplicationPorts } = await import('./application-adapter.mjs');
+const { createBackupPorts } = await import('./backup-adapter.mjs');
 
 // ---------------------------------------------------------------------------
 // 4) worker 内部状态
@@ -120,6 +124,12 @@ let db = null;
 let dbPath = null;
 /** @type {any} */
 let appDeps = null;
+/**
+ * 备份/恢复端口（**与数据库句柄同时建立**）：它需要 db + dbPath，
+ * 两者都在 `handleOpen` 里确定，所以不在 `buildApplicationDeps` 里建。
+ * @type {any}
+ */
+let backupPorts = null;
 let shuttingDown = false;
 let inFlight = 0;
 
@@ -199,6 +209,18 @@ function handleOpen(payload, requestId) {
     db = opened;
     dbPath = path;
     appDeps = buildApplicationDeps();
+    // 备份/恢复需要「库句柄 + 库路径」，与打开动作同一处建立；失败不影响开库本身
+    // （没有备份端口时只有 backup* 方法报错，写作功能照常）。因此这里**吞掉**构造异常，
+    // 绝不让备份端口的问题连累用户开库。
+    try {
+      backupPorts = createBackupPorts({ db: opened, databasePath: path });
+    } catch (thrown) {
+      backupPorts = null;
+      diagnose(
+        'error',
+        `建立备份端口失败（备份功能不可用，写作不受影响）：${thrown instanceof Error ? thrown.message : String(thrown)}`,
+      );
+    }
     diagnose('info', `数据库已打开并迁移：path=${path} schemaVersion=${readSchemaVersion(opened)}`);
     return ok({
       path,
@@ -228,6 +250,15 @@ function withApplication(requestId, run) {
   return run(appDeps);
 }
 
+/** 备份端口的统一入口：库没开或端口没建（建端口失败）时报「服务未就绪」而不是崩。 */
+function withBackup(requestId, run) {
+  if (!db) return errOf('STATE_INVALID_TRANSITION', '数据库尚未打开，请先调用 open', requestId);
+  if (backupPorts === null) {
+    return errOf('SERVICE_UNAVAILABLE', '备份服务未就绪（打开数据库时未能建立备份端口）', requestId);
+  }
+  return run(backupPorts);
+}
+
 /**
  * 用例分派表：worker **只转发**，不实现业务。
  *
@@ -248,6 +279,9 @@ const DISPATCH = {
     withApplication(requestId, (deps) => listDocumentTreeUseCase(deps, payload)),
   getDocument: (payload, requestId) => withApplication(requestId, (deps) => getDocumentUseCase(deps, payload)),
   createProject: (payload, requestId) => withApplication(requestId, (deps) => createProjectUseCase(deps, payload)),
+  listProjects: (payload, requestId) => withApplication(requestId, (deps) => listProjectsUseCase(deps, payload)),
+  updateProject: (payload, requestId) => withApplication(requestId, (deps) => updateProjectUseCase(deps, payload)),
+  deleteProject: (payload, requestId) => withApplication(requestId, (deps) => deleteProjectUseCase(deps, payload)),
   createDocument: (payload, requestId) => withApplication(requestId, (deps) => createDocumentUseCase(deps, payload)),
   updateDocument: (payload, requestId) =>
     withApplication(requestId, (deps) => updateDocumentUseCase(deps, payload)),
@@ -259,10 +293,18 @@ const DISPATCH = {
     withApplication(requestId, (deps) => getSettingsEntityUseCase(deps, payload)),
   saveSettingsEntity: (payload, requestId) =>
     withApplication(requestId, (deps) => saveSettingsEntityUseCase(deps, payload)),
+  // 备份/恢复：不进 WRITE_METHODS —— 它不写业务库（VACUUM INTO 只读快照；
+  // 恢复写的是另一个文件），套事务既无意义又会把文件复制关在写事务里。
+  backupCreate: (payload, requestId) => withBackup(requestId, (ports) => ports.backupCreate(payload, requestId)),
+  backupList: (payload, requestId) => withBackup(requestId, (ports) => ports.backupList(payload, requestId)),
+  backupVerify: (payload, requestId) => withBackup(requestId, (ports) => ports.backupVerify(payload, requestId)),
+  backupRestore: (payload, requestId) => withBackup(requestId, (ports) => ports.backupRestore(payload, requestId)),
 };
 const WRITE_METHODS = new Set([
   'saveDraft',
   'createProject',
+  'updateProject',
+  'deleteProject',
   'createDocument',
   'updateDocument',
   'deleteDocument',
@@ -336,6 +378,7 @@ async function handleShutdown() {
   } finally {
     db = null;
     appDeps = null;
+    backupPorts = null;
     process.exit(0);
   }
 }

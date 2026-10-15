@@ -238,8 +238,8 @@ export interface ProjectPort {
   listProjects(request: ListProjectsRequest): Promise<Result<readonly Project[]>>
   /** 重命名作品（CAS 乐观锁在适配器）。 */
   updateProject(request: UpdateProjectRequest): Promise<Result<ProjectWriteResult>>
-  /** 软删作品（级联子文档；适配器返回实际标记删除的行数）。 */
-  deleteProject(request: DeleteProjectRequest): Promise<Result<ProjectDeleteResult>>
+  /** 软删作品。🔴 只标记作品行，**不级联**子文档；重复删除由适配器报 NOT_FOUND_PROJECT。 */
+  deleteProject(request: DeleteProjectRequest): Promise<Result<ProjectWriteResult>>
 }
 
 export interface ListProjectsRequest {
@@ -259,11 +259,6 @@ export interface DeleteProjectRequest {
   readonly context: WriteContext
   readonly projectId: ProjectId
   readonly occurredAt: UtcTimestamp
-}
-
-export interface ProjectDeleteResult {
-  readonly revision: Revision
-  readonly deletedCount: number
 }
 
 // ---------------------------------------------------------------------------

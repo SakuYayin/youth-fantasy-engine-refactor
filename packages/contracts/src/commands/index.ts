@@ -428,16 +428,27 @@ export interface BackupCreateOutput {
   readonly durationMs: number
 }
 
-export interface BackupFileEntry {
+/**
+ * 备份列表项。
+ *
+ * 🔴 命名刻意不叫 `BackupFileEntry`：`@yfe/persistence-sqlite` 的清单层已用该名
+ *    描述「快照里的一个文件（fileName/sha256/byteSize）」，两者含义不同，同名会误读。
+ */
+export interface BackupEntry {
+  /** 快照绝对路径（主进程生成，渲染层只用于回传给 verify/restore）。 */
   readonly backupPath: string
   readonly manifestPath: string
   readonly label: string
+  /** 清单里的创建时间；清单缺失/不可解析时为 null（列表**不因此隐藏**该项）。 */
   readonly createdAt: UtcTimestamp | null
+  /** 快照字节数（来自文件系统；清单缺失时仍可显示）。 */
   readonly byteSize: number
+  /** 清单是否可解析——false 表示这份备份已损坏，仅能列出不能恢复。 */
+  readonly readable: boolean
 }
 
 export interface BackupListOutput {
-  readonly backups: readonly BackupFileEntry[]
+  readonly backups: readonly BackupEntry[]
 }
 
 export interface BackupVerifyInput {
