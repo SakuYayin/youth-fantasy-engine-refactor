@@ -10,6 +10,10 @@
       "default": "./src/readers/index.ts"
     }
   },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
   "dependencies": {
     "@yfe/contracts": "*",
     "@yfe/domain": "*",

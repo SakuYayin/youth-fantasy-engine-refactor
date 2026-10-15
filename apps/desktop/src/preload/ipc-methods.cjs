@@ -5,7 +5,7 @@
  * 🔴 为什么是 `.cjs` 而不是 `.mjs`：
  *   设计文档 02 要求 renderer 安全三元组含 `sandbox: true`，而 **Electron 的沙箱化
  *   preload 脚本不能加载 ESM**（`.mjs` preload 仅在 `sandbox: false` 下可用）。
- *   于是 preload 必须是 CommonJS，它 `require` 的白名单副本也必须是 CJS。
+ *   preload 必须自包含，不能 require 本地文件；本副本只供 main 使用。
  *   详见 docs/adr/0003-preload-sandbox-cjs.md。
  *
  * 🔴 权威定义在 `../shared/ipc/channels.ts`（TypeScript）。这里只是运行时可用的副本，

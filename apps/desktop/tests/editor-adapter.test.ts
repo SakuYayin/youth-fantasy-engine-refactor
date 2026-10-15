@@ -45,6 +45,25 @@ function contentOf(adapter: CodeMirrorAdapter): HTMLElement {
 }
 
 describe('编辑器适配层：正文与选择', () => {
+  it('切换只读状态不重建正文、选区与撤销历史，组合态可被导航层查询', () => {
+    const adapter = makeAdapter()
+    adapter.open({ documentId: 'doc_1', body: '原稿', selection: { from: 2 } })
+    adapter.applyTransaction([{ from: 2, to: 2, insert: '新增' }])
+    const selection = adapter.getSelection()
+    adapter.setReadOnly(true)
+    expect(contentOf(adapter).getAttribute('contenteditable')).toBe('false')
+    expect(adapter.getBody()).toBe('原稿新增')
+    expect(adapter.getSelection()).toEqual(selection)
+    adapter.setReadOnly(false)
+    expect(adapter.undo()).toBe(true)
+    expect(adapter.getBody()).toBe('原稿')
+    contentOf(adapter).dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    expect(adapter.isComposing).toBe(true)
+    contentOf(adapter).dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+    expect(adapter.isComposing).toBe(false)
+    adapter.dispose()
+  })
+
   it('open 写入正文，getBody 读回；换文档会清掉 undo 历史', () => {
     const adapter = makeAdapter()
     adapter.open({ documentId: 'doc_1', body: 'AAAA' })

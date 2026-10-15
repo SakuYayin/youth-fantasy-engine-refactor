@@ -13,7 +13,7 @@
  * 由 Lead 统一装配，本文件不许改它。
  */
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ContractError, newIds } from '@yfe/contracts'
 import type { JobId, UserId, UtcTimestamp, WorkspaceId } from '@yfe/contracts'
 import type { FastifyInstance } from 'fastify'
@@ -21,6 +21,8 @@ import type { FastifyInstance } from 'fastify'
 import { DEFAULT_SESSION_POLICY } from '../src/auth/session.js'
 import type { SessionPolicy } from '../src/auth/session.js'
 import { appendJobOutput, countJobOutputs, listJobOutputs, submitJob } from '../src/db/jobs.js'
+import * as jobsRepo from '../src/db/jobs.js'
+import { revokeAllUserSessions } from '../src/db/sessions.js'
 import type { JobOutputRecord, JobRepoDeps } from '../src/db/jobs.js'
 import { upsertMember } from '../src/db/members.js'
 import { migrateServerDatabase } from '../src/db/migrator.js'
@@ -52,6 +54,7 @@ interface EventsHarness {
 const harnesses: EventsHarness[] = []
 
 afterEach(() => {
+  vi.restoreAllMocks()
   for (const harness of harnesses.splice(0)) {
     harness.close()
   }
@@ -175,6 +178,37 @@ function jobOutputEvents(body: string): SseEventView[] {
 function countOf(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1
 }
+
+describe('SSE 连接期间重新鉴权', () => {
+  it.each(['membership', 'session', 'disabled'] as const)('%s 被撤销后不再推送后续正文', async (kind) => {
+    const h = await makeEventsHarness()
+    harnesses.push(h)
+    const { userId, workspaceId } = await seedOwner(h.db, h.clock.now())
+    const jobId = submit(h, userId, workspaceId)
+    const headers = await loginAs(h.app)
+    const list = jobsRepo.listJobEvents
+    vi.spyOn(jobsRepo, 'listJobEvents').mockImplementationOnce((db, input, deps) => {
+      const page = list(db, input, deps)
+      if (kind === 'membership') {
+        h.db.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(workspaceId, userId)
+      } else if (kind === 'session') {
+        revokeAllUserSessions(h.db, userId, h.clock.now(), 'test_revoked')
+      } else {
+        h.db.prepare('UPDATE users SET disabled = 1 WHERE id = ?').run(userId)
+      }
+      append(h, jobId, 'chunk', { text: '撤销后的机密正文' })
+      return page
+    })
+
+    const response = await h.app.inject({
+      method: 'GET', url: eventsUrl(workspaceId, '?maxPolls=2&pollIntervalMs=0'), headers,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.body).toContain('event: error')
+    expect(response.body).not.toContain('撤销后的机密正文')
+    expect(jobOutputEvents(response.body)).toHaveLength(1)
+  })
+})
 
 // ---------------------------------------------------------------------------
 // job_outputs 仓储

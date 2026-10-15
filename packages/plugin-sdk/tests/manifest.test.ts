@@ -437,6 +437,23 @@ describe('semver 子集', () => {
     expect(satisfiesRange('1.0.0', '^^1.0.0')).toBe(false)
   })
 
+  it('空或非法 OR 分支不能绕过宿主版本检查', () => {
+    for (const range of ['^1.0.0 ||', '|| ^1.0.0', '^1.0.0 || || ^2.0.0', '^1.0.0 || nope']) {
+      expect(isValidRange(range)).toBe(false)
+      expect(satisfiesRange('9.9.9', range)).toBe(false)
+      expect(satisfiesRange('1.0.0', range)).toBe(false)
+      expectInvalid({ ...baseline(), hostApiRange: range })
+    }
+  })
+
+  it('预发布数字段按数值、长度及数字优先规则比较', () => {
+    expect(satisfiesRange('1.0.0-rc.10', '>1.0.0-rc.2')).toBe(true)
+    expect(satisfiesRange('1.0.0-rc.2', '>1.0.0-rc.10')).toBe(false)
+    expect(satisfiesRange('1.0.0-rc.1', '<1.0.0-rc.1.0')).toBe(true)
+    expect(satisfiesRange('1.0.0-1', '<1.0.0-alpha')).toBe(true)
+    expect(satisfiesRange('1.0.0-rc.100000000000000000001', '>1.0.0-rc.100000000000000000000')).toBe(true)
+  })
+
   it('isValidRange', () => {
     expect(isValidRange('^1.0.0')).toBe(true)
     expect(isValidRange('1.x')).toBe(true)

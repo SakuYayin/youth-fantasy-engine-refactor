@@ -1,6 +1,6 @@
 # 后端单机部署（飞牛 NAS / 任意 Docker 主机）
 #
-# 用法见 deploy/README.md。两条硬约束先写在最前面：
+# 运行约束见 docs/adr/0005-backend-runtime-and-deployment.md。两条硬约束：
 # 1. 基础镜像必须是 Node ≥ 22.15（本文件用 Dockerfile 的 node:24），否则启动器 exit 2；
 # 2. 秘密文件在宿主机上必须 `chown 1000:1000` + `chmod 600`——服务端对 POSIX 秘密文件
 #    强制要求"仅所有者可读"，而容器里的进程是 uid 1000（node）。

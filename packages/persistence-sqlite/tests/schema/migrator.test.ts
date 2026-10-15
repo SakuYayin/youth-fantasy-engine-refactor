@@ -662,6 +662,7 @@ describe('🔴 一致备份：VACUUM INTO 而不是复制文件', () => {
 
       // 用户手放的说明文件不能被误删。
       writeFileSync(join(backupDir, 'README.txt'), '这些是迁移前备份')
+      writeFileSync(join(backupDir, 'another-novel.db'), '用户另一本书')
       createConsistentBackup(db, {
         dbPath: path,
         backupDir,
@@ -670,10 +671,39 @@ describe('🔴 一致备份：VACUUM INTO 而不是复制文件', () => {
         keep: 1,
       })
       expect(readdirSync(backupDir)).toContain('README.txt')
+      expect(readdirSync(backupDir)).toContain('another-novel.db')
       expect(DEFAULT_BACKUP_KEEP).toBe(5)
     } finally {
       closeDatabase(db)
     }
+  })
+
+  it('备份目录与源库同目录时，保留策略不能清理源数据库', () => {
+    const dir = makeTempDir('backup-prune-source')
+    const path = dbPathIn(dir)
+    const db = openDatabase(path)
+    try {
+      db.exec('CREATE TABLE source_data (body TEXT)')
+      for (let i = 0; i < 2; i += 1) {
+        createConsistentBackup(db, { dbPath: path, backupDir: dir, fromVersion: i,
+          clock: fixedClock(`2026-03-04T05:06:0${i}.000Z`), keep: 1 })
+      }
+      expect(existsSync(path)).toBe(true)
+    } finally { closeDatabase(db) }
+  })
+
+  it('一百个备份路径全部碰撞时，不能删除已有备份', () => {
+    const dir = makeTempDir('backup-collision-limit')
+    const path = dbPathIn(dir)
+    const db = openDatabase(path)
+    try {
+      const options = { dbPath: path, backupDir: dir, fromVersion: 0, clock: fixedClock('2026-03-04T05:06:07.000Z') }
+      const first = createConsistentBackup(db, options)!
+      for (let i = 1; i < 100; i += 1) writeFileSync(`${first.path}.${i}.db`, 'existing backup')
+      expect(() => createConsistentBackup(db, options)).toThrow(ContractError)
+      expect(existsSync(`${first.path}.99.db`)).toBe(true)
+      expect(readdirSync(dir).filter((name) => name.endsWith('.db'))).toHaveLength(101)
+    } finally { closeDatabase(db) }
   })
 
   it('内存库没有可备份的文件 → 整体返回 null（不是 path:null 的空壳）', () => {

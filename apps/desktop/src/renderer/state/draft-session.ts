@@ -199,6 +199,7 @@ export class DraftSession {
     if (this.conflict !== null || this.hasUnsavedChanges || this.inFlight !== null) {
       this.conflict = { externalRevision: update.revision, externalBody: update.body };
       this.cancelTimer();
+      this.finishFlushes(null);
       this.refresh();
       return 'conflict';
     }
@@ -223,6 +224,12 @@ export class DraftSession {
 
     this.conflict = null;
     this.lastErrorCode = null;
+    // 旧请求仍可能到达，但不能再确认新基线下的正文。
+    this.inFlight = null;
+    this.draftSequence += 1;
+    this.confirmedBody = pending.externalBody;
+    this.revision = pending.externalRevision;
+    this.finishFlushes(null);
 
     if (resolution === 'take-external') {
       this.cancelTimer();
@@ -232,7 +239,6 @@ export class DraftSession {
       this.body = pending.externalBody;
       this.confirmedBody = pending.externalBody;
       this.revision = pending.externalRevision;
-      this.draftSequence += 1;
       this.lastConfirmedSequence = this.draftSequence;
       this.pendingSince = null;
       this.refresh();
@@ -335,6 +341,7 @@ export class DraftSession {
     this.saveAttempts += 1;
     this.refresh();
 
+    const flight = this.inFlight;
     void Promise.resolve()
       .then(() => this.deps.save(request))
       .then(
@@ -343,7 +350,7 @@ export class DraftSession {
           if (normalized.code === 'SAVE_RESULT_MALFORMED') {
             this.diagnose('warn', '适配器返回了无法识别的保存结果，按一次失败结算');
           }
-          this.settle(normalized);
+          this.settle(normalized, flight);
         },
         (error: unknown) => {
           // 适配器抛错等同于一次失败结果；正文与序号原地保留，绝不丢字。
@@ -351,16 +358,16 @@ export class DraftSession {
             ok: false,
             draftSequence: request.draftSequence,
             code: error instanceof Error ? 'SAVE_ADAPTER_THREW' : 'SAVE_ADAPTER_FAILED',
-          });
+          }, flight);
         },
       );
   }
 
-  private settle(outcome: DraftSaveOutcome): void {
+  private settle(outcome: DraftSaveOutcome, expectedFlight: typeof this.inFlight): void {
     if (this.disposed) return;
 
     const flight = this.inFlight;
-    if (flight === null) {
+    if (flight === null || flight !== expectedFlight) {
       this.ignoredResults += 1;
       this.diagnose('warn', `收到无在途保存的结果（序号 ${outcome.draftSequence}），已丢弃`);
       this.refresh();
@@ -374,13 +381,6 @@ export class DraftSession {
     // lastSettledSequence，而失败后 retry 用的还是同一个草稿序号——按已结算判定会把重试的
     // 成功结果当成迟到结果丢掉，inFlight 再也清不掉，会话永久卡在 saving，
     // 用户此后敲什么都存不进去（回归用例：draft-session.test.ts 的 retry 用同一序号）。
-    if (outcome.draftSequence < flight.sequence) {
-      this.ignoredResults += 1;
-      this.diagnose('warn', `丢弃迟到结果（序号 ${outcome.draftSequence} < 在途 ${flight.sequence}）`);
-      this.refresh();
-      return;
-    }
-
     if (outcome.draftSequence !== flight.sequence) {
       // 适配器回带了非本次在途的序号：视为协议违例，本次以失败结算但确认正文不变。
       this.inFlight = null;
@@ -409,9 +409,10 @@ export class DraftSession {
 
   private afterSettle(sequence: number, outcome: DraftSaveOutcome | null): void {
     const settled = this.flushWaiters;
-    this.flushWaiters = settled.filter((waiter) => waiter.target > sequence);
+    const willContinue = outcome?.ok === true && this.hasUnsavedChanges && this.conflict === null;
+    this.flushWaiters = settled.filter((waiter) => willContinue && waiter.target > sequence);
     for (const waiter of settled) {
-      if (waiter.target <= sequence) waiter.resolve(outcome);
+      if (!willContinue || waiter.target <= sequence) waiter.resolve(outcome);
     }
 
     // 只有「本次确实保存成功」才立刻续派在途期间到达的新改动。
@@ -422,6 +423,12 @@ export class DraftSession {
       this.dispatch();
     }
     this.refresh();
+  }
+
+  private finishFlushes(outcome: DraftSaveOutcome | null): void {
+    const waiters = this.flushWaiters;
+    this.flushWaiters = [];
+    for (const waiter of waiters) waiter.resolve(outcome);
   }
 
   private cancelTimer(): void {
@@ -451,11 +458,12 @@ export class DraftSession {
  */
 function coerceOutcome(value: unknown, fallbackSequence: number): DraftSaveOutcome {
   if (typeof value === 'object' && value !== null) {
-    const candidate = value as { draftSequence?: unknown; ok?: unknown };
+    const candidate = value as { draftSequence?: unknown; ok?: unknown; revision?: unknown };
     if (
       typeof candidate.draftSequence === 'number' &&
-      Number.isFinite(candidate.draftSequence) &&
-      typeof candidate.ok === 'boolean'
+      Number.isSafeInteger(candidate.draftSequence) && candidate.draftSequence >= 0 &&
+      typeof candidate.ok === 'boolean' &&
+      (!candidate.ok || (typeof candidate.revision === 'string' && candidate.revision.length > 0))
     ) {
       return value as DraftSaveOutcome;
     }

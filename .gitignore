@@ -19,6 +19,7 @@ data/
 logs/
 *.log
 .imports/
+.selfcheck/
 
 # --- 秘密（见 04-后端与安全.md / 09-部署与运维.md）---
 .env

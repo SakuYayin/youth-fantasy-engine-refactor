@@ -187,7 +187,29 @@ function compareSemver(a: Semver, b: Semver): number {
   if (a.prerelease === '') return 1
   if (b.prerelease === '') return -1
   if (a.prerelease === b.prerelease) return 0
-  return a.prerelease < b.prerelease ? -1 : 1
+  const left = a.prerelease.split('.')
+  const right = b.prerelease.split('.')
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const first = left[index]
+    const second = right[index]
+    if (first === undefined) return -1
+    if (second === undefined) return 1
+    if (first === second) continue
+    const firstNumeric = /^\d+$/.test(first)
+    const secondNumeric = /^\d+$/.test(second)
+    if (firstNumeric && secondNumeric) {
+      // 数字段可能超过 JS 安全整数；按十进制位数和字典序比较，不转 Number。
+      const firstDigits = first.replace(/^0+(?=\d)/, '')
+      const secondDigits = second.replace(/^0+(?=\d)/, '')
+      if (firstDigits.length !== secondDigits.length) return firstDigits.length < secondDigits.length ? -1 : 1
+      if (firstDigits !== secondDigits) return firstDigits < secondDigits ? -1 : 1
+    } else if (firstNumeric !== secondNumeric) {
+      return firstNumeric ? -1 : 1
+    } else {
+      return first < second ? -1 : 1
+    }
+  }
+  return 0
 }
 
 interface Comparator {
@@ -260,7 +282,8 @@ function parseWildcardToken(rawOp: string | undefined, rawVersion: string): Comp
 
 function parseAlternative(raw: string): Comparator[] | null {
   const text = raw.trim()
-  if (text === '' || text === '*' || text === 'x' || text === 'X') return []
+  if (text === '') return null
+  if (text === '*' || text === 'x' || text === 'X') return []
   const comparators: Comparator[] = []
   for (const token of text.split(/\s+/)) {
     if (token === '') continue
@@ -324,16 +347,10 @@ function satisfiesComparator(version: Semver, comparator: Comparator): boolean {
 export function satisfiesRange(version: string, range: string): boolean {
   const parsedVersion = parseSemver(version)
   if (!parsedVersion || typeof range !== 'string') return false
-  // 空 range 视为「无范围可用」而非「任意版本」：
-  // `parseAlternative('')` 返回的是空比较符数组（等同 `*`），而空数组的
-  // `every(...)` 恒为 true，会把 `satisfiesRange('9.9.9', '')` 误判成满足。
-  if (range.trim() === '') return false
-  for (const alternative of range.split('||')) {
-    const comparators = parseAlternative(alternative)
-    if (!comparators) continue
-    if (comparators.every((comparator) => satisfiesComparator(parsedVersion, comparator))) return true
-  }
-  return false
+  // 任一分支非法即拒绝整个范围，空 OR 分支不得退化成任意版本。
+  const alternatives = range.split('||').map(parseAlternative)
+  return alternatives.every((comparators) => comparators !== null) &&
+    alternatives.some((comparators) => comparators?.every((comparator) => satisfiesComparator(parsedVersion, comparator)))
 }
 
 export function isValidRange(range: unknown): boolean {

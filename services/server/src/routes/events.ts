@@ -239,6 +239,16 @@ export function registerJobEventRoutes(app: FastifyInstance, deps: JobRouteDeps)
         yield `retry: ${JOB_EVENT_LIMITS.streamRetryMs}\n\n`
         let cursor = since
         for (let poll = 0; poll < maxPolls; poll += 1) {
+          try {
+            // 长连接跨越多个事件循环；会话、账号和成员资格必须按当前状态重查。
+            request.yfeNow = deps.now()
+            await deps.guards.requireSession(request, reply)
+            authorizeWorkspaceAccess(permissionDeps, request, workspaceId, 'read')
+          } catch (error) {
+            if (!(error instanceof ContractError)) throw error
+            yield `event: error\ndata: ${JSON.stringify({ code: error.code, requestId })}\n\n`
+            return
+          }
           const page = listJobEvents(
             deps.db,
             { workspaceId, sinceEventSeq: cursor, jobId: jobIdFilter, limit },

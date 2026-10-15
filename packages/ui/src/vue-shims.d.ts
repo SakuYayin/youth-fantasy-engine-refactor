@@ -1,10 +1,8 @@
 /**
  * `.vue` 对 tsc 的声明（ADR 0006 D1）。
  *
- * `packages/ui/tsconfig.json` 只收 src 下的 `.ts`（含本文件），`.vue` 不进
- * tsc 门禁，模板正确性靠 `@vue/test-utils` 挂载测试兜底；但没有这份声明，
- * `index.ts` 里那几个 `export { default as YfeXxx } from './components/*.vue'`
- * 会直接红掉。
+ * 普通 tsc 测试入口用此声明解析 .vue；UI 和桌面包另外用 vue-tsc 检查真实模板，
+ * 并用挂载测试验证运行时行为。
  *
  * 注意：本注释里不能写 `src` 后跟 `/**` 那种 glob 字面量——里面的 `*` 加 `/`
  * 会提前把块注释关掉，整个文件被当成代码解析（这是真踩过的坑）。

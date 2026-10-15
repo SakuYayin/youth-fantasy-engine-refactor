@@ -15,11 +15,12 @@
  *       中途失败只删临时副本，原有文件保持原样。
  */
 
-import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
 import {
   checkSchemaCompat,
+  DB_SCHEMA_VERSION,
   errOf,
   ok,
   type RequestId,
@@ -38,6 +39,7 @@ import {
   type SqliteDatabase,
 } from '../schema/index.js'
 import { fsError, reasonOf } from './fsErrors.js'
+import { sameFilePath } from './paths.js'
 import {
   corrupt,
   defaultManifestPath,
@@ -148,6 +150,9 @@ export function verifyBackup(input: VerifyBackupInput): Result<VerifyBackupOutpu
     if (missingTable !== null) {
       return corrupt(requestId, `备份缺少必需的表 ${missingTable}。`, { missingTable })
     }
+    if ((snapshot.pragma('foreign_key_check') as readonly unknown[]).length !== 0) {
+      return corrupt(requestId, '备份存在失效的实体引用，无法安全恢复。', { field: 'foreignKeys' })
+    }
 
     const databaseSchemaVersion = readSchemaVersion(snapshot)
     if (databaseSchemaVersion !== manifest.databaseSchemaVersion) {
@@ -164,7 +169,7 @@ export function verifyBackup(input: VerifyBackupInput): Result<VerifyBackupOutpu
         'STORAGE_SCHEMA_TOO_NEW',
         '备份来自更新版本的程序，当前程序无法安全恢复。请升级程序后重试，或使用新版本导出兼容副本。',
         requestId,
-        { found: databaseSchemaVersion, supported: manifest.databaseSchemaVersion },
+        { found: databaseSchemaVersion, supported: DB_SCHEMA_VERSION },
       )
     }
 
@@ -216,6 +221,8 @@ export function verifyBackup(input: VerifyBackupInput): Result<VerifyBackupOutpu
       integrity: 'ok',
       entityCounts: facts.entityCounts,
     })
+  } catch (thrown) {
+    return corrupt(requestId, '读取备份结构或内容时失败。', { reason: reasonOf(thrown) })
   } finally {
     closeDatabase(snapshot)
   }
@@ -245,11 +252,10 @@ export interface RestoreBackupOutput {
  *
  * 顺序（每一步都为了"失败不留损坏目标"）：
  * 1. 先校验源备份 → 失败直接返回，目标一动不动；
- * 2. 复制到 `<target>.restoring`；
+ * 2. 复制到目标同目录下独占创建的暂存目录，并提前写出新清单；
  * 3. **对副本再校验一遍**（磁盘满/坏道造成的半截复制在这里被抓住）；
- * 4. 仅在副本完全合格后才换名到目标；
- * 5. 把清单写到目标旁边（恢复结果本身要是一份可再次校验的恢复点）；
- * 6. 最后对目标做一次独立校验（换名后磁盘立刻损坏时能发现并删除）。
+ * 4. 仅在副本完全合格后才保留旧文件并换名到目标；
+ * 5. 新库与清单一起落位后再独立校验；切换或校验失败时回滚原文件。
  */
 export function restoreBackup(input: RestoreBackupInput): Result<RestoreBackupOutput> {
   const { requestId } = input
@@ -262,41 +268,69 @@ export function restoreBackup(input: RestoreBackupInput): Result<RestoreBackupOu
   if (isMemoryPath(targetPath)) {
     return errOf('VALIDATION_FAILED', '恢复目标必须是文件路径，不能是内存库。', requestId, { field: 'targetPath' })
   }
-  if (targetPath === input.backupPath) {
-    return errOf('VALIDATION_FAILED', '恢复目标不能与备份文件相同，会破坏唯一备份。', requestId, {
-      field: 'targetPath',
-    })
+  const targetManifestPath = defaultManifestPath(targetPath)
+  try {
+    for (const outputPath of [targetPath, targetManifestPath]) {
+      for (const sourcePath of [input.backupPath, manifestPath]) {
+        if (sameFilePath(outputPath, sourcePath)) {
+          return errOf('VALIDATION_FAILED', '恢复目标或清单不能与源备份或源清单指向同一文件。', requestId,
+            { field: 'targetPath' })
+        }
+      }
+    }
+    if (sameFilePath(targetPath, targetManifestPath)) {
+      return errOf('VALIDATION_FAILED', '恢复目标与目标清单不能指向同一文件。', requestId)
+    }
+  } catch (thrown) {
+    return fsError(thrown, requestId, '无法确认恢复路径是否安全。')
   }
 
   const sourceVerified = verifyBackup({ requestId, backupPath: input.backupPath, manifestPath })
   if (!sourceVerified.ok) return sourceVerified
 
-  if (existsSync(targetPath) && input.overwrite !== true) {
+  if ((existsSync(targetPath) || existsSync(targetManifestPath)) && input.overwrite !== true) {
     return errOf('ALREADY_EXISTS', '恢复目标已存在。覆盖已有数据库必须显式声明 overwrite。', requestId, {
       field: 'targetPath',
     })
   }
 
+  let stagingDir: string
   try {
+    // 不能把活动库的 WAL/回滚日志带入新库，也不能替换目录或符号链接。
+    for (const path of [targetPath, targetManifestPath]) {
+      if (existsSync(path) && !lstatSync(path).isFile()) {
+        return errOf('VALIDATION_FAILED', '恢复目标和目标清单必须是普通文件。', requestId)
+      }
+    }
+    if (['-wal', '-shm', '-journal'].some((suffix) => existsSync(`${targetPath}${suffix}`))) {
+      return errOf('RESOURCE_LOCKED', '恢复目标存在数据库日志，请关闭使用该库的程序后重试。', requestId)
+    }
     mkdirSync(dirname(targetPath), { recursive: true })
+    stagingDir = mkdtempSync(join(dirname(targetPath), '.yfe-restore-'))
   } catch (thrown) {
     return fsError(thrown, requestId, '无法创建恢复目标目录，请检查磁盘与权限。')
   }
 
-  const stagingPath = `${targetPath}.restoring`
-  removeQuietly(stagingPath)
+  const stagingPath = join(stagingDir, 'database.db')
+  const stagingManifestPath = join(stagingDir, 'manifest.json')
+  const originalPath = join(stagingDir, 'original.db')
+  const originalManifestPath = join(stagingDir, 'original.manifest.json')
+  const cleanup = (): void => {
+    try { rmSync(stagingDir, { recursive: true, force: true }) } catch { /* 保留原始失败。 */ }
+  }
 
   try {
     copyFileSync(input.backupPath, stagingPath)
+    writeFileSync(stagingManifestPath, serializeBackupManifest(sourceVerified.value.manifest), { encoding: 'utf8', flag: 'wx' })
   } catch (thrown) {
-    removeQuietly(stagingPath)
+    cleanup()
     return fsError(thrown, requestId, '复制备份到恢复目标失败，请检查磁盘空间与权限。')
   }
 
   // ③ 副本自校验：这是"磁盘满导致半截文件"的唯一拦截点。
-  const stagedVerified = verifyBackup({ requestId, backupPath: stagingPath, manifestPath })
+  const stagedVerified = verifyBackup({ requestId, backupPath: stagingPath, manifestPath: stagingManifestPath })
   if (!stagedVerified.ok) {
-    removeQuietly(stagingPath)
+    cleanup()
     return {
       ok: false,
       error: {
@@ -307,55 +341,54 @@ export function restoreBackup(input: RestoreBackupInput): Result<RestoreBackupOu
     }
   }
 
-  // ④ 换名。Windows 上 `renameSync` 不能覆盖已存在文件，所以先删旧目标。
+  // ④ 保留原文件直到新库和新清单均落位且复核通过。任何失败都恢复原文件。
+  let originalMoved = false
+  let originalManifestMoved = false
+  let installed = false
+  let manifestInstalled = false
+  let committed = false
   try {
-    if (existsSync(targetPath)) rmSync(targetPath, { force: true })
+    if (existsSync(targetPath)) {
+      renameSync(targetPath, originalPath)
+      originalMoved = true
+    }
+    if (existsSync(targetManifestPath)) {
+      renameSync(targetManifestPath, originalManifestPath)
+      originalManifestMoved = true
+    }
     renameSync(stagingPath, targetPath)
-  } catch (thrown) {
-    removeQuietly(stagingPath)
-    return fsError(thrown, requestId, '写入恢复目标失败，已清理临时文件。')
-  }
-
-  // ⑤ 换名后独立复核：走到这里必须成功；失败说明磁盘在换名后立即损坏，不能留坏库。
-  //
-  // 🔴 顺手把清单也放到目标旁边：恢复出来的目录必须是一份**自洽、可再次校验/再次备份**的
-  //    恢复点。只给用户一个孤零零的 .db，他就再也无法验证这份数据、也无法把它当作新备份源
-  //    （`06:73` 要求恢复点包含版本与校验信息）。
-  const targetManifestPath = defaultManifestPath(targetPath)
-  try {
-    writeFileSync(targetManifestPath, serializeBackupManifest(sourceVerified.value.manifest), 'utf8')
-  } catch (thrown) {
-    removeQuietly(targetPath)
-    return fsError(
-      thrown,
-      requestId,
-      '恢复目标清单写入失败，已删除恢复出的数据库，以免留下无法校验的库。',
-    )
-  }
-
-  const finalVerified = verifyBackup({ requestId, backupPath: targetPath, manifestPath: targetManifestPath })
-  if (!finalVerified.ok) {
-    removeQuietly(targetManifestPath)
-    removeQuietly(targetPath)
-    return corrupt(requestId, '恢复后的目标库校验失败，已删除该文件以免用户误用损坏库。', {
-      reason: finalVerified.error.code,
+    installed = true
+    renameSync(stagingManifestPath, targetManifestPath)
+    manifestInstalled = true
+    const finalVerified = verifyBackup({ requestId, backupPath: targetPath, manifestPath: targetManifestPath })
+    if (!finalVerified.ok) return finalVerified
+    committed = true
+    return ok({
+      targetPath,
+      manifestPath: targetManifestPath,
+      manifest: sourceVerified.value.manifest,
+      byteSize: sourceVerified.value.manifest.databaseFile.byteSize,
+      verified: finalVerified.value,
     })
+  } catch (thrown) {
+    return fsError(thrown, requestId, '恢复目标切换失败，已保留原有文件。')
+  } finally {
+    let rollbackComplete = true
+    if (!committed) {
+      try {
+        if (manifestInstalled) rmSync(targetManifestPath)
+        if (installed) rmSync(targetPath)
+        if (originalMoved) renameSync(originalPath, targetPath)
+        if (originalManifestMoved) renameSync(originalManifestPath, targetManifestPath)
+      } catch {
+        // 回滚无法落位时必须保留 original.*，不能在清理时删除用户原库。
+        rollbackComplete = false
+      }
+    }
+    if (rollbackComplete) {
+      try { cleanup() } catch { /* 清理失败不掩盖恢复结果。 */ }
+    }
   }
-
-  let byteSize = sourceVerified.value.manifest.databaseFile.byteSize
-  try {
-    byteSize = statSync(targetPath).size
-  } catch {
-    /* 大小读不到不影响：上面已按摘要校验过内容 */
-  }
-
-  return ok({
-    targetPath,
-    manifestPath: targetManifestPath,
-    manifest: sourceVerified.value.manifest,
-    byteSize,
-    verified: finalVerified.value,
-  })
 }
 
 // ---------------------------------------------------------------------------
@@ -387,7 +420,6 @@ function firstLedgerMismatch(
   }
   return null
 }
-
 const COUNT_KEYS: readonly (keyof BackupEntityCounts)[] = [
   'projects',
   'documents',
@@ -450,12 +482,4 @@ function findMissingTable(db: SqliteDatabase): string | null {
     if (statement.get(name) === undefined) return name
   }
   return null
-}
-
-function removeQuietly(path: string): void {
-  try {
-    rmSync(path, { force: true })
-  } catch {
-    /* 清理失败不影响错误语义 */
-  }
 }

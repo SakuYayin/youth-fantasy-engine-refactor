@@ -8,7 +8,7 @@
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 
 import { afterAll, describe, expect, it } from 'vitest'
 
@@ -184,6 +184,14 @@ describe('创建备份：参数与冲突', () => {
       createBackup(env.db, { requestId: rid('same'), destinationPath, manifestPath: destinationPath }, { clock }),
       'VALIDATION_FAILED',
     )
+  })
+
+  it('清单通过 ./ 路径别名指向快照时，在写入前拒绝', () => {
+    const env = seedNovel('backup-path-alias')
+    const destinationPath = join(tempFilePath('backup-path-alias-out'), 'app.db')
+    const manifestPath = `${dirname(destinationPath)}/./${basename(destinationPath)}`
+    expectErrCode(createBackup(env.db, { requestId: rid('alias'), destinationPath, manifestPath }), 'VALIDATION_FAILED')
+    expect(existsSync(destinationPath)).toBe(false)
   })
 })
 

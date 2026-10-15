@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { isWellFormedId } from '@yfe/contracts'
 
 import type {
   DocumentCreateInput,
@@ -113,9 +114,9 @@ interface Overrides {
   status?: () => Result<SystemStatusOutput>
   tree?: () => Result<DocumentTreeOutput>
   get?: (documentId: string) => Result<DocumentGetOutput>
-  createProject?: (input: ProjectCreateInput) => Result<ProjectCreateOutput>
+  createProject?: (input: ProjectCreateInput) => Result<ProjectCreateOutput> | Promise<Result<ProjectCreateOutput>>
   createDocument?: (input: DocumentCreateInput) => Result<DocumentCreateOutput>
-  save?: (input: SaveDraftInput) => Result<SaveDraftOutput>
+  save?: (input: SaveDraftInput) => Result<SaveDraftOutput> | Promise<Result<SaveDraftOutput>>
 }
 
 interface Harness {
@@ -266,7 +267,7 @@ describe('app-state：保存状态机', () => {
     expect(harness.saves[0]?.body).toBe('甲甲甲')
     expect(harness.saves[0]?.documentId).toBe('doc_1')
     // 幂等键只跟「文档 + 草稿序号」有关：同序号重放必须命中同一条幂等记录。
-    expect(harness.saves[0]?.context.idempotencyKey).toBe('draft:doc_1:1')
+    expect(isWellFormedId(harness.saves[0]?.context.idempotencyKey)).toBe(true)
     expect(harness.saves[0]?.context.expectedRevision).toBe('rev_1')
     expect(harness.state.getSnapshot().saveStatus).toBe('saved')
   })
@@ -380,6 +381,85 @@ describe('app-state：冲突与外部更新', () => {
 })
 
 describe('app-state：新建作品与章节', () => {
+  it('保存失败或冲突时切章/新建均保留旧正文，不创建替代会话', async () => {
+    for (const action of ['select', 'chapter', 'project'] as const) {
+      const harness = makeHarness({ save: () => failure('STORAGE_DISK_FULL') })
+      await harness.state.start()
+      harness.state.edit('不能丢失的正文')
+      const changed = action === 'select' ? await harness.state.selectDocument('doc_2')
+        : action === 'chapter' ? await harness.state.createChapter('新章') : await harness.state.createProject('新作品')
+      expect(changed).toBe(false)
+      expect(harness.state.getSnapshot().selectedDocumentId).toBe('doc_1')
+      expect(harness.state.getSnapshot().body).toBe('不能丢失的正文')
+      expect(harness.documentInputs).toHaveLength(0)
+      expect(harness.projectInputs).toHaveLength(0)
+      harness.state.dispose()
+    }
+  })
+
+  it('新建章节前冲刷旧稿；重开同文档产生新会话幂等键', async () => {
+    const harness = makeHarness()
+    await harness.state.start()
+    harness.state.edit('切换前正文')
+    expect(await harness.state.createChapter('第三章')).toBe(true)
+    expect(harness.saves[0]?.body).toBe('切换前正文')
+    await harness.state.selectDocument('doc_1')
+    harness.state.edit('重开后的正文')
+    await harness.state.flush()
+    expect(harness.saves[1]?.draftSequence).toBe(1)
+    expect(harness.saves[1]?.context.idempotencyKey).not.toBe(harness.saves[0]?.context.idempotencyKey)
+    harness.state.dispose()
+  })
+
+  it('输入法组合态阻止导航；导航在途禁止编辑，退出冲刷等待导航完成', async () => {
+    const harness = makeHarness()
+    await harness.state.start()
+    harness.state.setNavigationGuard(() => false)
+    expect(await harness.state.selectDocument('doc_2')).toBe(false)
+    expect(harness.state.getSnapshot().selectedDocumentId).toBe('doc_1')
+    harness.state.setNavigationGuard(null)
+    let resolveCreation: (result: Result<ProjectCreateOutput>) => void = () => {}
+    harness.overrides.createProject = () => new Promise<Result<ProjectCreateOutput>>((resolve) => {
+      resolveCreation = resolve
+    })
+    const creating = harness.state.createProject('导航中的作品')
+    await flushMicrotasks()
+    harness.state.edit('导航期间不能混入的旧正文')
+    expect(harness.state.getSnapshot().body).toBe('第 1 章正文')
+    let closed = false
+    const closing = harness.state.flush().then((saved) => { closed = true; return saved })
+    await flushMicrotasks()
+    expect(closed).toBe(false)
+    resolveCreation({ ok: true, value: { projectId: 'prj_new' as ProjectId, revision: rev('rev_1') } })
+    expect(await creating).toBe(true)
+    expect(await closing).toBe(true)
+    expect(harness.store.value).toBe('prj_new')
+    harness.state.dispose()
+  })
+
+  it('旧回执不会把新正文的字数改回旧稿字数，也不会回退冲突裁决版本', async () => {
+    const harness = makeHarness()
+    let settle: ((result: Result<SaveDraftOutput>) => void) | undefined
+    harness.overrides.save = (input) => new Promise<Result<SaveDraftOutput>>((resolve) => {
+      settle = resolve
+      void input
+    })
+    await harness.state.start()
+    harness.state.edit('短')
+    const flushed = harness.state.flush()
+    await flushMicrotasks()
+    harness.state.edit('这是当前的新正文')
+    harness.state.applyExternalUpdate({ documentId: 'doc_1', revision: 'external', body: '外部正文' })
+    harness.state.resolveConflict('take-external')
+    settle?.(savedOutput(harness.saves[0]!, 1))
+    await flushed
+    await flushMicrotasks()
+    expect(harness.state.getSnapshot().body).toBe('外部正文')
+    expect(harness.state.getSnapshot().revision).toBe('external')
+    expect(harness.state.getSnapshot().charCount).toBe(4)
+    harness.state.dispose()
+  })
+
   it('新建作品后记住 ID 并载入第一章', async () => {
     const harness = makeHarness({}, null)
     await harness.state.start()

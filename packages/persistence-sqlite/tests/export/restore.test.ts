@@ -7,10 +7,17 @@
  * - **失败不留损坏目标**：任何一步失败，目标位置要么不存在、要么保持原样。
  */
 
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return { ...actual, renameSync: vi.fn(actual.renameSync) }
+})
+const originalFs = await vi.importActual<typeof import('node:fs')>('node:fs')
+afterEach(() => { vi.mocked(renameSync).mockReset().mockImplementation(originalFs.renameSync) })
 
 import type { RequestId, UtcTimestamp } from '@yfe/contracts'
 
@@ -180,6 +187,53 @@ describe('恢复：往返无损', () => {
       'VALIDATION_FAILED',
     )
   })
+
+  it('目标通过路径别名指向源备份，或直接指向源清单时拒绝且源文件不变', () => {
+    const { backupPath, manifestPath } = seedBackup('restore-source-alias')
+    const source = readFileSync(backupPath)
+    const manifest = readFileSync(manifestPath)
+    for (const targetPath of [`${dirname(backupPath)}/./${basename(backupPath)}`, manifestPath]) {
+      expectErrCode(restoreBackup({ requestId: rid('alias'), backupPath, targetPath, overwrite: true }), 'VALIDATION_FAILED')
+    }
+    expect(readFileSync(backupPath)).toEqual(source)
+    expect(readFileSync(manifestPath)).toEqual(manifest)
+  })
+
+  it('目标清单是目录时拒绝覆盖，原数据库保持原样', () => {
+    const { backupPath } = seedBackup('restore-manifest-directory')
+    const targetPath = join(makeTempDir('restore-manifest-directory-target'), 'restored.db')
+    writeFileSync(targetPath, 'original user data')
+    mkdirSync(defaultManifestPath(targetPath))
+    expectErrCode(restoreBackup({ requestId: rid('directory'), backupPath, targetPath, overwrite: true }), 'VALIDATION_FAILED')
+    expect(readFileSync(targetPath, 'utf8')).toBe('original user data')
+  })
+
+  it('新清单落位失败时，原数据库与原清单均回滚', () => {
+    const { backupPath } = seedBackup('restore-install-failure')
+    const targetPath = join(makeTempDir('restore-install-failure-target'), 'restored.db')
+    const targetManifestPath = defaultManifestPath(targetPath)
+    writeFileSync(targetPath, 'original database')
+    writeFileSync(targetManifestPath, 'original manifest')
+    vi.mocked(renameSync).mockImplementation((source, target) => {
+      if (basename(String(source)) === 'manifest.json') throw Object.assign(new Error('injected'), { code: 'EACCES' })
+      originalFs.renameSync(source, target)
+    })
+    const result = restoreBackup({ requestId: rid('install-failure'), backupPath, targetPath, overwrite: true })
+    expect(result.ok).toBe(false)
+    expect(readFileSync(targetPath, 'utf8')).toBe('original database')
+    expect(readFileSync(targetManifestPath, 'utf8')).toBe('original manifest')
+    expect(verifyBackup({ requestId: rid('source-retained'), backupPath }).ok).toBe(true)
+  })
+
+  it('目标留有活动 WAL 时拒绝恢复，避免旧日志混入新库', () => {
+    const { backupPath } = seedBackup('restore-active-wal')
+    const targetPath = join(makeTempDir('restore-active-wal-target'), 'restored.db')
+    writeFileSync(targetPath, 'original database')
+    writeFileSync(`${targetPath}-wal`, 'active journal')
+    expectErrCode(restoreBackup({ requestId: rid('wal'), backupPath, targetPath, overwrite: true }), 'RESOURCE_LOCKED')
+    expect(readFileSync(targetPath, 'utf8')).toBe('original database')
+    expect(readFileSync(`${targetPath}-wal`, 'utf8')).toBe('active journal')
+  })
 })
 
 describe('恢复：校验失败绝不当成空库', () => {
@@ -273,6 +327,19 @@ describe('恢复：校验失败绝不当成空库', () => {
     expectErrCode(result, 'STORAGE_SCHEMA_TOO_NEW')
     expect(errorDetail(result).found).toBe(2)
     expect(existsSync(targetPath)).toBe(false)
+  })
+
+  it('摘要和行数自洽但文档引用不存在的作品时，不能通过恢复校验', () => {
+    const { backupPath, manifestPath } = seedBackup('restore-orphan-reference')
+    const admin = openDatabase(backupPath)
+    admin.pragma('foreign_keys = OFF')
+    admin.prepare("UPDATE documents SET project_id = 'prj_missing_reference'").run()
+    admin.pragma('wal_checkpoint(TRUNCATE)')
+    closeDatabase(admin)
+    refreshManifestHashes(backupPath, manifestPath)
+    const result = verifyBackup({ requestId: rid('orphan'), backupPath })
+    expectErrCode(result, 'STORAGE_CORRUPT')
+    expect(errorDetail(result).field).toBe('foreignKeys')
   })
 
   it('恢复目标父路径是文件 → 失败且无残留', () => {

@@ -20,7 +20,7 @@
  */
 
 import {
-  encodeRevision,
+  newRevision,
   newIds,
   systemClock,
   isWellFormedId,
@@ -325,6 +325,8 @@ export interface IdempotencyRecord {
   /** 用例名（`saveDraft` / `createProject` / `createDocument`）。同键跨用例即 `IDEMPOTENCY_KEY_REUSED`。 */
   readonly scope: string
   readonly value: string
+  /** 规范化请求身份，只用于精确比较，禁止写入日志或错误。 */
+  readonly requestIdentity?: string
 }
 
 /**
@@ -365,8 +367,8 @@ export function createApplicationIds(rng?: RandomSource): ApplicationIdGenerator
   }
 }
 
-/** 默认 revision 生成器：与 persistence 包默认实现同一个 `encodeRevision`。 */
-export const systemRevisionGenerator: RevisionGenerator = { next: encodeRevision }
+/** 默认标识跨设备唯一；排序使用数据库内部序号。 */
+export const systemRevisionGenerator: RevisionGenerator = { next: newRevision }
 
 /** 用给定端口装配完整依赖；`clock` / `ids` / `revisions` 可覆盖（测试必覆盖）。 */
 export function createApplicationDeps(

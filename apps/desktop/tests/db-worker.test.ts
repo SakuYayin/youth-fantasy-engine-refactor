@@ -115,6 +115,19 @@ describe('db-worker 错误边界', () => {
 });
 
 describe('db-worker 用例分派', () => {
+  it('真实 worker 崩溃后自动重开原数据库，后续调用恢复可用', async () => {
+    const oldPid = host.stats().pid
+    host.forceKillWorker()
+    const deadline = Date.now() + 5_000
+    while (Date.now() < deadline && (host.stats().state !== 'ready' || host.stats().pid === oldPid)) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    const status = await host.call('systemStatus', null)
+    expect(status.ok, JSON.stringify(status)).toBe(true)
+    if (status.ok) expect((status.value as { databasePath: string }).databasePath).toBe(dbPath)
+    expect(host.stats().pid).not.toBe(oldPid)
+  })
+
   it('端到端链路：createProject → createDocument → saveDraft → getDocument 全部落到真实用例层', async () => {
     const workspaceId = 'w-selfcheck';
     const baseContext = () => ({ requestId: 'req-test', workspaceId });

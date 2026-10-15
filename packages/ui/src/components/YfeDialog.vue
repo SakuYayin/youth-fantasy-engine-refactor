@@ -11,7 +11,7 @@
  * 刻意不用 `Teleport`：渲染层可能在 Electron 窗口里嵌多个根，弹层放在原位、
  * 用 `position: fixed` 覆盖即可，也免得测试与被裁剪的容器斗智。
  */
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 
 import { designTokenVariables } from '../tokens.js'
 import YfeButton from './YfeButton.vue'
@@ -33,11 +33,9 @@ const emit = defineEmits<{ confirm: []; cancel: [] }>()
 const DEFAULT_CANCEL_LABEL = '取消'
 
 /**
- * 标题关联用的 id：模块级计数器而不是全局 `useId`，免得为一行 id 依赖新 API，
- * 也保证同页两个对话框不会撞 id。
+ * 标题关联用的 id 必须跨组件实例唯一；script setup 中的变量每个实例都会重建。
  */
-let dialogSeq = 0
-const titleId = `yfe-dialog-title-${(dialogSeq += 1)}`
+const titleId = `yfe-dialog-title-${useId()}`
 
 const rootRef = ref<HTMLElement | null>(null)
 

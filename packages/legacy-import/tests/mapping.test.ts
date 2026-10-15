@@ -60,6 +60,67 @@ function revisionsOf(input: ImportPlan): readonly PlannedRevision[] {
 }
 
 describe('M-01 作品字段映射', () => {
+  it('嵌套凭据不会进入配置、旁存或报告，非秘密字段保留且源对象不变', async () => {
+    const result = await plan({
+      projects: [{ id: 'p-private', name: '作品', custom: { nested: [{ apiKey: 'must-not-leak-1', label: '保留' }] } }],
+      settingsKV: [{ key: 'p-private::aiProviders', value: [{ apiKey: 'must-not-leak-2' }] }],
+    })
+    expect(JSON.stringify(result)).not.toContain('must-not-leak')
+    expect(JSON.stringify(result.rows)).toContain('保留')
+    expect(result.warnings.some((warning) => warning.kind === 'redacted-sensitive')).toBe(true)
+    const base = await syntheticCollectionWithLocalStorage()
+    const collection = {
+      ...base,
+      sources: base.sources.map((source) => ({
+        ...source,
+        stores: source.stores.map((store) => store.name === 'localStorage' ? {
+          ...store,
+          records: [
+            { key: 'yfe-sync-webdav', value: JSON.stringify({ host: 'example.test', password: 'must-not-leak-3' }) },
+            { key: 'yfe-sync-s3', value: JSON.stringify({ bucket: 'novels', nested: [{ secretKey: 'must-not-leak-4' }] }) },
+          ],
+        } : store),
+      })),
+    }
+    const original = JSON.stringify(collection)
+    const configured = buildImportPlan(collection, { now: NOW })
+    expect(JSON.stringify(configured)).not.toContain('must-not-leak')
+    expect(JSON.stringify(configured.rows)).toContain('example.test')
+    expect(JSON.stringify(configured.rows)).toContain('novels')
+    expect(JSON.stringify(collection)).toBe(original)
+  })
+
+  it('两个来源旧 ID 相同时，作品、卷、快照与回收站仍属于各自来源', async () => {
+    const collection = await syntheticCollection()
+    const source = collection.sources[0]
+    if (!source) throw new Error('missing source')
+    const sources = ['legacy-a', 'legacy-b'].map((sourceId) => ({
+      ...structuredClone(source),
+      sourceId,
+      stores: structuredClone(source.stores).map((store) => sourceId === 'legacy-b' && store.name === 'trash'
+        ? { ...store, records: [], rows: 0 }
+        : store),
+    }))
+    const result = buildImportPlan({ ...collection, sources }, { now: NOW })
+    for (const sourceId of ['legacy-a', 'legacy-b']) {
+      const project = result.rows.find((row) => row.table === 'project' && row.origin.sourceId === sourceId)
+      if (project?.table !== 'project') throw new Error('missing project')
+      const documents = result.rows.filter((row): row is PlannedDocument => row.table === 'document' && row.origin.sourceId === sourceId)
+      for (const document of documents) {
+        expect(document.projectId).toBe(project.id)
+        if (document.parentId !== null) {
+          expect(documents.some((row) => row.id === document.parentId)).toBe(true)
+        }
+      }
+      for (const revision of revisionsOf(result).filter((row) => row.origin.sourceId === sourceId)) {
+        expect(documents.some((row) => row.id === revision.entityId)).toBe(true)
+      }
+    }
+    const deletedA = documentsOf(result, 'chapter').filter((row) => row.origin.sourceId === 'legacy-a' && row.deleted === 1)
+    expect(deletedA.length).toBeGreaterThan(0)
+    expect(documentsOf(result, 'chapter').filter((row) => row.origin.sourceId === 'legacy-b').every((row) => row.deleted === 0)).toBe(true)
+  })
+
   it('旧 ID 被原样保留，name/intro/projectType 落到对应列', async () => {
     const result = await plan()
     const project = result.rows.find((row) => row.table === 'project' && row.id === SYNTHETIC_PROJECT_ID)

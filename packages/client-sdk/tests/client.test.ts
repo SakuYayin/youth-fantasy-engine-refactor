@@ -289,6 +289,24 @@ describe('transport 抛异常', () => {
 // ---------------------------------------------------------------------------
 
 describe('超时', () => {
+  it('超出定时器上限的配置回退默认超时，不会溢出成 1ms', async () => {
+    vi.useFakeTimers()
+    try {
+      const deferred = f.deferredTransport()
+      const pending = createClient(deferred.transport, { timeoutMs: 2_147_483_648 }).systemStatus()
+      let settled = false
+      void pending.then(() => { settled = true })
+      await vi.advanceTimersByTimeAsync(1)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS - 1)
+      const error = f.expectErr(await pending).error
+      expect(error.code).toBe('NETWORK_TIMEOUT')
+      expect(error.detail?.['timeoutMs']).toBe(DEFAULT_TIMEOUT_MS)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('默认 15000ms：到点前不结算；到点后 NETWORK_TIMEOUT/retryable:true；定时器已清理；迟到结果被忽略', async () => {
     vi.useFakeTimers()
     try {
@@ -373,9 +391,12 @@ describe('超时', () => {
       [-1, DEFAULT_TIMEOUT_MS],
       [Number.NaN, DEFAULT_TIMEOUT_MS],
       [Number.POSITIVE_INFINITY, DEFAULT_TIMEOUT_MS],
+      [2_147_483_648, DEFAULT_TIMEOUT_MS],
+      [Number.MAX_SAFE_INTEGER, DEFAULT_TIMEOUT_MS],
       ['5000', DEFAULT_TIMEOUT_MS],
       [1, 1],
       [250, 250],
+      [2_147_483_647, 2_147_483_647],
     ]
     for (const [input, expected] of cases) {
       expect(normalizeTimeout(input)).toBe(expected)

@@ -38,6 +38,7 @@ import {
   type SqliteDatabase,
 } from '../schema/index.js'
 import { fsError, reasonOf } from './fsErrors.js'
+import { sameFilePath } from './paths.js'
 import {
   buildBackupManifest,
   corrupt,
@@ -95,7 +96,7 @@ export function createBackup(
       field: 'destinationPath',
     })
   }
-  if (manifestPath === destinationPath) {
+  if (sameFilePath(manifestPath, destinationPath)) {
     return errOf('VALIDATION_FAILED', '清单路径不能与快照路径相同。', requestId, { field: 'manifestPath' })
   }
   if (existsSync(manifestPath)) {
@@ -183,6 +184,9 @@ function describeSnapshotAndWriteManifest(
       return corrupt(requestId, `新建快照缺少必需的表 ${missingTable}，已删除该文件。`, {
         missingTable,
       })
+    }
+    if ((snapshot.pragma('foreign_key_check') as readonly unknown[]).length !== 0) {
+      return corrupt(requestId, '新建快照存在失效的实体引用，已删除该文件。', { field: 'foreignKeys' })
     }
 
     const manifestResult = buildBackupManifest(snapshot, { requestId, snapshotPath: destinationPath, createdAt })

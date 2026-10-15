@@ -24,14 +24,13 @@
  * 校验源 → 复制到 `<target>.restoring` → **对副本再校验一次**（拦半截复制）→
  * 原子换名 → 对最终目标再校验。任一步失败都清理临时文件，不留损坏的目标库。
  *
- * ⚠️ 已知陷阱（`./localFs.ts` 的 `moveFile`）：它的语义是**内容寻址搬运**——
- * 目标已存在且大小相同时它会**删掉源文件**并返回 `false`。直接拿它做"覆盖式换名"
- * 会在"新旧库大小恰好相同"时把校验过的副本删掉、留下旧库。所以这里的
- * `atomicReplace` 先删目标再换名，并且换名后**必须再校验**。
+ * 目标替换使用同目录 rename，不能使用内容寻址的 moveFile。覆盖前保留旧目标，
+ * 最终校验失败则恢复旧目标；替换本身失败时原文件保持不变。
  */
 
-import { copyFileSync, readFileSync, statSync } from 'node:fs'
-import { basename, dirname } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { copyFileSync, readFileSync, renameSync, statSync } from 'node:fs'
+import { basename, dirname, resolve } from 'node:path'
 
 import type { RequestId, UtcTimestamp } from '@yfe/contracts'
 import { APP_VERSION, checkSchemaCompat } from '@yfe/contracts'
@@ -52,7 +51,6 @@ import {
   fsErrnoOf,
   isRegularFile,
   listFilesRecursive,
-  moveFile,
   pathExists,
   removeFileIfExists,
   sha256OfFile,
@@ -837,8 +835,7 @@ export async function verifyCopiedDatabaseFileWithHash(
 /**
  * 原子换名。
  *
- * 🔴 必须先把目标删掉再 `moveFile`：`localFs.moveFile` 在"目标已存在且大小相同"
- * 时会**删源文件**并返回 `false`（内容寻址语义），那样会把刚校验过的副本弄丢。
+ * 使用同目录 rename 直接替换；禁止预先删除目标或使用内容寻址搬运。
  */
 /** 只判断"是不是目录"；不存在/ENOTDIR 都算 false。 */
 function isDirectoryOf(target: string): boolean {
@@ -851,25 +848,18 @@ function isDirectoryOf(target: string): boolean {
 }
 
 function atomicReplace(from: string, to: string, requestId: RequestId): void {
-  if (pathExists(to)) {
-    removeFileIfExists(to)
-  }
-  let moved: boolean
   try {
-    moved = moveFile(from, to)
+    // 同目录 rename 可直接原子覆盖，失败时旧目标仍在。
+    renameSync(from, to)
   } catch (thrown) {
     fail(errorCodeForFsFailure(thrown), '恢复时无法替换目标文件。', requestId, {
       reason: 'rename_failed',
       fileName: basename(to),
     })
   }
-  if (!moved) {
-    fail('INTERNAL_ERROR', '恢复时目标文件未被替换。', requestId, {
-      reason: 'rename_skipped',
-      fileName: basename(to),
-    })
-  }
 }
+
+const restoringTargets = new Set<string>()
 
 export interface RestoreStorageBackupOptions {
   readonly requestId: RequestId
@@ -906,9 +896,8 @@ export interface RestoredStorageBackup {
  * 5. 原子换名；
  * 6. 对最终目标再校验。
  *
- * 有且只有第 5 步是不可逆的：一旦换名生效，旧目标就没了。所以第 1–4 步的任何
- * 失败都不会碰目标；第 6 步失败则删掉目标（宁可"没有库"也不要"坏库被当成好库"
- * 继续跑，那才是真正的静默数据损坏）。调用方（路由）必须已经完成
+ * 第 1–4 步失败不会碰目标；替换前保留旧目标副本，第 6 步失败时回滚旧目标。
+ * 原本不存在目标时则清理失败的新库。调用方（路由）必须已经完成
  * 系统管理员 + 维护模式 + 二次认证三道闸门。
  */
 export async function restoreStorageBackup(
@@ -917,6 +906,13 @@ export async function restoreStorageBackup(
   const { requestId, sourcePath, targetPath } = options
   const backupFileName = basename(sourcePath)
   const tempPath = `${targetPath}${BACKUP_RESTORE_TEMP_SUFFIX}`
+  const rollbackPath = `${targetPath}.previous-${randomUUID()}`
+  const absoluteTarget = resolve(targetPath)
+  const lockKey = process.platform === 'win32' ? absoluteTarget.toLowerCase() : absoluteTarget
+  if (restoringTargets.has(lockKey)) {
+    fail('RESOURCE_LOCKED', '目标库正在恢复，请等待当前恢复完成。', requestId, { reason: 'restore_in_progress' })
+  }
+  restoringTargets.add(lockKey)
 
   const cleanup = (path: string): void => {
     try {
@@ -926,80 +922,102 @@ export async function restoreStorageBackup(
     }
   }
 
-  // 1. 源
-  const bytes = requireRegularBackupFile(sourcePath, requestId)
-  const sha256 = await sha256OfFile(sourcePath)
-
-  // 2. 目标已存在？
-  if (pathExists(targetPath)) {
-    if (isDirectoryOf(targetPath)) {
-      // 目标是目录：这不是"覆盖"能表达的事（覆盖一个目录的语义是删掉它），
-      // 直接拒掉，而不是让后面的 rename 撞 EPERM 变成 500。
-      fail('STATE_INVALID_TRANSITION', '目标路径是一个目录，恢复需要一个文件路径。', requestId, {
-        reason: 'target_is_directory',
-        targetFileName: basename(targetPath),
-      })
-    }
-    if (!options.overwrite) {
-      fail('ALREADY_EXISTS', '目标库已存在。恢复会覆盖它，请显式确认覆盖。', requestId, {
-        reason: 'target_exists',
-        targetFileName: basename(targetPath),
-      })
-    }
-  }
-
-  // 3. 复制到副本（先清掉上一次崩溃留下的残骸）
-  ensureDir(dirname(targetPath))
-  cleanup(tempPath)
   try {
-    copyFileSync(sourcePath, tempPath)
-  } catch (thrown) {
+    // 1. 源
+    const bytes = requireRegularBackupFile(sourcePath, requestId)
+    const sha256 = await sha256OfFile(sourcePath)
+
+    // 2. 目标已存在？
+    if (pathExists(targetPath)) {
+      if (isDirectoryOf(targetPath)) {
+        // 目标是目录：这不是"覆盖"能表达的事（覆盖一个目录的语义是删掉它），
+        // 直接拒掉，而不是让后面的 rename 撞 EPERM 变成 500。
+        fail('STATE_INVALID_TRANSITION', '目标路径是一个目录，恢复需要一个文件路径。', requestId, {
+          reason: 'target_is_directory',
+          targetFileName: basename(targetPath),
+        })
+      }
+      if (!options.overwrite) {
+        fail('ALREADY_EXISTS', '目标库已存在。恢复会覆盖它，请显式确认覆盖。', requestId, {
+          reason: 'target_exists',
+          targetFileName: basename(targetPath),
+        })
+      }
+    }
+
+    // 3. 复制到副本（先清掉上一次崩溃留下的残骸）
+    ensureDir(dirname(targetPath))
     cleanup(tempPath)
-    fail(errorCodeForFsFailure(thrown), '复制备份失败，目标库未被改动。', requestId, {
-      reason: 'copy_failed',
-      backupFileName,
-    })
-  }
-
-  // 4. 副本校验（拦"半截复制"）
-  try {
-    await verifyCopiedDatabaseFileWithHash(tempPath, { requestId, expectedBytes: bytes, expectedSha256: sha256 })
-    options.verifyDatabase(tempPath)
-  } catch (thrown) {
-    cleanup(tempPath)
-    throw thrown
-  }
-
-  // 5. 原子换名（唯一不可逆的一步）
-  try {
-    atomicReplace(tempPath, targetPath, requestId)
-  } catch (thrown) {
-    cleanup(tempPath)
-    throw thrown
-  }
-
-  // 6. 最终目标再校验
-  try {
-    const finalBytes = fileSizeOrNull(targetPath)
-    if (finalBytes !== bytes) {
-      corrupt(requestId, 'restored_size_mismatch', '恢复后的目标库字节数不正确。', {
-        targetFileName: basename(targetPath),
-        expectedBytes: bytes,
-        actualBytes: finalBytes ?? null,
+    try {
+      copyFileSync(sourcePath, tempPath)
+    } catch (thrown) {
+      cleanup(tempPath)
+      fail(errorCodeForFsFailure(thrown), '复制备份失败，目标库未被改动。', requestId, {
+        reason: 'copy_failed',
+        backupFileName,
       })
     }
-    const finalSha = await sha256OfFile(targetPath)
-    if (finalSha !== sha256) {
-      corrupt(requestId, 'restored_hash_mismatch', '恢复后的目标库校验和不正确。', {
-        targetFileName: basename(targetPath),
-      })
-    }
-    options.verifyDatabase(targetPath)
-  } catch (thrown) {
-    // 留下的库已被证明不可信：删掉它，让"没有库"显式失败，而不是让坏库顶着用。
-    cleanup(targetPath)
-    throw thrown
-  }
 
-  return { sourcePath, targetPath, bytes, sha256, backupFileName }
+    // 4. 副本校验（拦"半截复制"）
+    try {
+      await verifyCopiedDatabaseFileWithHash(tempPath, { requestId, expectedBytes: bytes, expectedSha256: sha256 })
+      options.verifyDatabase(tempPath)
+    } catch (thrown) {
+      cleanup(tempPath)
+      throw thrown
+    }
+
+    // 5. 保存旧目标；最终校验失败也能回到恢复之前的状态。
+    const hadTarget = pathExists(targetPath)
+    if (hadTarget) {
+      try {
+        copyFileSync(targetPath, rollbackPath)
+      } catch (thrown) {
+        cleanup(tempPath)
+        cleanup(rollbackPath)
+        fail(errorCodeForFsFailure(thrown), '无法保留旧目标，恢复已停止，目标库未被改动。', requestId, {
+          reason: 'rollback_copy_failed',
+        })
+      }
+    }
+    try {
+      atomicReplace(tempPath, targetPath, requestId)
+    } catch (thrown) {
+      cleanup(tempPath)
+      cleanup(rollbackPath)
+      throw thrown
+    }
+
+    // 6. 最终目标再校验
+    try {
+      const finalBytes = fileSizeOrNull(targetPath)
+      if (finalBytes !== bytes) {
+        corrupt(requestId, 'restored_size_mismatch', '恢复后的目标库字节数不正确。', {
+          targetFileName: basename(targetPath),
+          expectedBytes: bytes,
+          actualBytes: finalBytes ?? null,
+        })
+      }
+      const finalSha = await sha256OfFile(targetPath)
+      if (finalSha !== sha256) {
+        corrupt(requestId, 'restored_hash_mismatch', '恢复后的目标库校验和不正确。', {
+          targetFileName: basename(targetPath),
+        })
+      }
+      options.verifyDatabase(targetPath)
+    } catch (thrown) {
+      if (hadTarget) {
+        // 回滚失败时保留旧库副本以供运维恢复，不能清理掉唯一的原始数据。
+        atomicReplace(rollbackPath, targetPath, requestId)
+      } else {
+        cleanup(targetPath)
+      }
+      throw thrown
+    }
+
+    cleanup(rollbackPath)
+    return { sourcePath, targetPath, bytes, sha256, backupFileName }
+  } finally {
+    restoringTargets.delete(lockKey)
+  }
 }

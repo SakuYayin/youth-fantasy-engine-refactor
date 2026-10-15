@@ -47,7 +47,10 @@ export type RawInvoke = (method: string, payload: unknown) => Promise<Result<unk
 
 /** 非法超时值回落到默认值：永远不会把 0 / 负数解释成「立即超时」。 */
 export function normalizeTimeout(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : DEFAULT_TIMEOUT_MS
+  // 浏览器/Node 的定时器上限是有符号 32 位整数，溢出会变成约 1ms。
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 2_147_483_647
+    ? value
+    : DEFAULT_TIMEOUT_MS
 }
 
 function timeoutError(method: string, timeoutMs: number, requestId: RequestId): ErrorPayload {

@@ -103,6 +103,7 @@ export async function createProject(
         // 🔴 幂等记录里必须**连 projectId 一起**缓存：否则重放会回一个从未落库的新 ID。
         return { ok: true, value: { projectId, revision: written.value.revision } }
       },
+      JSON.stringify([context.value.workspaceId, name.value, summary, seedFirstChapter, templateId]),
     )
     return created
   })

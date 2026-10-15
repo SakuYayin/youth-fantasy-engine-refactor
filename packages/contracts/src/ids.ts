@@ -113,6 +113,15 @@ export function encodeRevision(seq: number): Revision {
   return `r${seq.toString(36).padStart(8, '0')}` as Revision
 }
 
+/**
+ * 可跨离线副本使用的修订标识；排序仍只用库内 revision_seq。
+ * 同一文档在两台离线设备上都会推进到相同序号，不能仅用序号作为身份。
+ */
+export function newRevision(seq: number, rng: RandomSource = cryptoRandomSource): Revision {
+  encodeRevision(seq) // 保留安全整数与溢出校验。
+  return `rev_${rng.uuid()}` as Revision
+}
+
 /** 游标编码：同样刻意不做数值暴露。 */
 export function encodeCursor(seq: number, scope: string): Cursor {
   if (!Number.isSafeInteger(seq) || seq < 0) {

@@ -18,8 +18,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import Database from 'better-sqlite3';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServiceHost, type ServiceHost } from '../src/main/service-host.mjs';
+import { createAppState, type RendererClientPort } from '../src/renderer/app-state.js';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const WORKER_PATH = join(HERE, '..', 'src', 'main', 'db-worker.mjs');
@@ -81,6 +83,68 @@ afterAll(async () => {
 });
 
 describe('桌面端到端：建作品 → 建文档 → 存草稿 → 读文档 → 读文档树', () => {
+  it('真实渲染状态生成的草稿幂等键通过用例校验，保存并重新加载中文正文', async () => {
+    let remembered: string | null = null;
+    const client = Object.fromEntries(['systemStatus', 'listDocumentTree', 'getDocument', 'createProject', 'createDocument', 'saveDraft']
+      .map(method => [method, (payload: unknown) => host.call(method, payload)])) as unknown as RendererClientPort;
+    const deps = {
+      client, workspaceId: 'w-renderer-integration',
+      projectStore: { read: () => remembered, write: (id: string | null) => { remembered = id; } },
+      newRequestId: () => randomUUID(), newSessionId: () => `ui_${randomUUID()}`,
+    };
+    const first = createAppState(deps);
+    let reopened: ReturnType<typeof createAppState> | undefined;
+    try {
+      await first.start();
+      expect(await first.createProject('界面保存回归')).toBe(true);
+      const body = '真实界面路径的中文🙂\n第二行正文';
+      first.edit(body);
+      expect(await first.flush()).toBe(true);
+      expect(first.getSnapshot().saveStatus).toBe('saved');
+      reopened = createAppState(deps);
+      await reopened.start();
+      expect(reopened.getSnapshot().body).toBe(body);
+    } finally { first.dispose(); reopened?.dispose(); }
+  });
+  it('同键创建并发和 worker 重启后的重放均只产生一部作品，换参明确拒绝', async () => {
+    const input = { context: context('w-receipt', { idempotencyKey: 'durable-create-key' }), name: '幂等创建' };
+    const [first, duplicate] = await Promise.all([host.call('createProject', input), host.call('createProject', input)]);
+    expect(first.ok, JSON.stringify(first)).toBe(true);
+    expect(duplicate).toEqual(first);
+    const oldPid = host.stats().pid;
+    host.forceKillWorker();
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && (host.stats().state !== 'ready' || host.stats().pid === oldPid)) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(await host.call('createProject', input)).toEqual(first);
+    const changed = await host.call('createProject', { ...input, name: '同键不同作品' });
+    expect(changed.ok).toBe(false);
+    if (!changed.ok) expect(changed.error.code).toBe('IDEMPOTENCY_KEY_REUSED');
+    const inspection = new Database(dbPath, { readonly: true });
+    try {
+      expect(inspection.prepare("SELECT COUNT(*) AS n FROM projects WHERE workspace_id = 'w-receipt'").get()).toEqual({ n: 1 });
+      expect(inspection.prepare("SELECT COUNT(*) AS n FROM outbox o JOIN operations p ON p.op_id=o.op_id WHERE p.entity_type='application-receipt'").get()).toEqual({ n: 0 });
+    } finally { inspection.close(); }
+  });
+
+  it('命令回执写入失败时，作品与工作区也一起回滚', async () => {
+    const inspection = new Database(dbPath);
+    inspection.exec(`CREATE TRIGGER fail_receipt BEFORE INSERT ON operations
+      WHEN NEW.entity_type='application-receipt' BEGIN SELECT RAISE(ABORT, 'receipt fault'); END`);
+    try {
+      const result = await host.call('createProject', {
+        context: context('w-receipt-failure', { idempotencyKey: 'receipt-failure' }), name: '不能部分提交',
+      });
+      expect(result.ok).toBe(false);
+      expect(inspection.prepare("SELECT COUNT(*) AS n FROM projects WHERE workspace_id='w-receipt-failure'").get()).toEqual({ n: 0 });
+      expect(inspection.prepare("SELECT COUNT(*) AS n FROM workspaces WHERE id='w-receipt-failure'").get()).toEqual({ n: 0 });
+    } finally {
+      inspection.exec('DROP TRIGGER fail_receipt');
+      inspection.close();
+    }
+  });
+
   it('createProject 返回的 projectId 必须就是库里的行（读文档树能查到）', async () => {
     const workspaceId = 'w-int-project';
     const projectId = await createProject(workspaceId);

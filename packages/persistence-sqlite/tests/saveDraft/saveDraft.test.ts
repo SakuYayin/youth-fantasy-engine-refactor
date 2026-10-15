@@ -318,14 +318,9 @@ describe('3. 同 draftSequence 幂等重放', () => {
     expect(countRows(f.db, 'revisions')).toBe(1)
     expect(countRows(f.db, 'outbox')).toBe(1)
 
-    // 重放时正文**刻意不同**：若实现把重放当新草稿，正文与计数都会变。
-    const replay = okValue(
-      saveDraft(f.db, input(f, '重放时携带的另一份正文', 1, encodeRevision(2)), f.deps),
-    )
-
-    expect(replay.revision).toBe(first.revision)
-    expect(replay.savedAt).toBe(first.savedAt)
-    expect(replay.draftSequence).toBe(first.draftSequence)
+    // 相同序号换正文必须拒绝，不能让调用方误以为新稿已保存。
+    const replay = saveDraft(f.db, input(f, '重放时携带的另一份正文', 1, encodeRevision(2)), f.deps)
+    expect(errPayload(replay).code).toBe('IDEMPOTENCY_KEY_REUSED')
 
     expect(countRows(f.db, 'operations')).toBe(1)
     expect(countRows(f.db, 'revisions')).toBe(1)
@@ -341,10 +336,41 @@ describe('3. 同 draftSequence 幂等重放', () => {
     const f = fixture({ body: '起始正文' })
     const body = '同一份正文'
     const first = okValue(saveDraft(f.db, input(f, body, 1, encodeRevision(1)), f.deps))
-    const replay = saveDraft(f.db, input(f, body, 1, encodeRevision(2)), f.deps)
+    const replay = saveDraft(f.db, input(f, body, 1, encodeRevision(1)), f.deps)
 
     expect(replay).toEqual({ ok: true, value: first })
     expect(at(readRevisionRows(f.db, f.documentId), 0).seq).toBe(2)
+  })
+
+  it('另一会话已推进正文后，丢失回执的原请求仍返回原结果', () => {
+    const f = fixture()
+    const request = input(f, 'A 原稿', 1, encodeRevision(1))
+    const first = saveDraft(f.db, request, f.deps)
+    okValue(saveDraft(f.db, input(f, 'B 新稿', 1, encodeRevision(2), { sessionId: 'session-b' }), f.deps))
+    expect(saveDraft(f.db, request, f.deps)).toEqual(first)
+    expect(readDocumentRow(f.db, f.documentId).body).toBe('B 新稿')
+    expect(countRows(f.db, 'operations')).toBe(2)
+  })
+
+  it('确认水位线被数据库拒绝时，正文、历史与 outbox 全部回滚', () => {
+    const f = fixture({ body: '原稿' })
+    f.db.exec(`CREATE TRIGGER reject_draft_confirmation BEFORE UPDATE ON local_drafts
+      WHEN NEW.confirmed_revision IS NOT NULL BEGIN SELECT RAISE(IGNORE); END`)
+    const result = saveDraft(f.db, input(f, '不可部分提交', 1, encodeRevision(1)), f.deps)
+    expect(errPayload(result).code).toBe('STATE_INVALID_TRANSITION')
+    expect(readDocumentRow(f.db, f.documentId).body).toBe('原稿')
+    for (const table of ['local_drafts', 'revisions', 'operations', 'outbox']) {
+      expect(countRows(f.db, table)).toBe(0)
+    }
+  })
+
+  it('未确认的空正文仍可恢复，不能漏掉用户清空整章的编辑', () => {
+    const f = fixture({ body: '待清空的旧稿' })
+    putPendingDraft(f.db, { documentId: f.documentId, sessionId: SESSION, sequence: 1,
+      body: '', baseRevision: encodeRevision(1), updatedAt: FIXED_ISO })
+    expect(listRecoverableDrafts(f.db)).toHaveLength(1)
+    expect(listRecoverableDrafts(f.db, SESSION)[0]?.body).toBe('')
+    expect(listRecoverableDrafts(f.db, 'another-session')).toEqual([])
   })
 })
 

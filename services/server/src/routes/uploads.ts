@@ -250,6 +250,14 @@ export function registerUploadRoutes(app: FastifyInstance, deps: UploadRouteDeps
     }
   }
 
+  const withAsyncStorage = async <T>(requestId: RequestId, field: string, run: () => Promise<T>): Promise<T> => {
+    try {
+      return await run()
+    } catch (error) {
+      return storageFailure(error, requestId, field)
+    }
+  }
+
   /** 清理 staging（失败只记日志：残留目录不影响正确性，但要知道）。 */
   const cleanupStaging = (workspaceId: string, uploadId: string): void => {
     try {
@@ -709,99 +717,101 @@ export function registerUploadRoutes(app: FastifyInstance, deps: UploadRouteDeps
         throw stateError(requestId, uploadId, latest.status)
       }
 
-      const assembled = await withStorage(requestId, 'assembled', () =>
-        storage.assembleObject(workspaceId, uploadId, partNumbers),
-      )
-      const actualSha256 = await withStorage(requestId, 'sha256', () =>
-        storage.sha256OfFile(assembled.absolutePath),
-      )
+      try {
+        const assembled = await withAsyncStorage(requestId, 'assembled', () =>
+          storage.assembleObject(workspaceId, uploadId, partNumbers),
+        )
+        const actualSha256 = await withAsyncStorage(requestId, 'sha256', () =>
+          storage.sha256OfFile(assembled.absolutePath),
+        )
 
-      if (assembled.byteSize !== session.declaredSize || actualSha256 !== declaredSha256) {
-        // 内容与声明不符 → 整单作废：清掉 staging（**不留半成品**），会话置 aborted。
-        cleanupStaging(workspaceId, uploadId)
-        abortUploadSession(deps.db, uploadId, 'aborted')
-        log({
-          event: 'upload.integrity_failed',
-          requestId,
-          uploadId,
-          expectedSha256: declaredSha256,
-          actualSha256,
-          expectedSize: session.declaredSize,
-          actualSize: assembled.byteSize,
-        })
-        throw new ContractError({
-          code: 'STORAGE_CORRUPT',
-          message: '整对象 sha256 与声明的摘要不符，本次上传已作废。',
-          requestId,
-          detail: {
-            field: 'sha256',
-            expected: declaredSha256,
-            actual: actualSha256,
+        // 流式 I/O 期间角色/会话可能被撤销；在提交前使用当前时刻重新认证。
+        request.yfeNow = deps.now()
+        await deps.guards.requireSession(request, reply)
+        authorizeWorkspaceAccess(permissionDeps, request, workspaceId, 'write')
+
+        if (assembled.byteSize !== session.declaredSize || actualSha256 !== declaredSha256) {
+          // 内容与声明不符 → 整单作废：清掉 staging（**不留半成品**），会话置 aborted。
+          cleanupStaging(workspaceId, uploadId)
+          abortUploadSession(deps.db, uploadId, 'aborted')
+          log({
+            event: 'upload.integrity_failed',
+            requestId,
+            uploadId,
+            expectedSha256: declaredSha256,
+            actualSha256,
             expectedSize: session.declaredSize,
             actualSize: assembled.byteSize,
-          },
-        })
-      }
-
-      const committed = withStorage(requestId, 'storage_key', () =>
-        storage.commitObject(actualSha256, assembled.absolutePath, assembled.byteSize),
-      )
-
-      const outcome = tx(deps.db, () => {
-        const existing = findAssetByStorageKey(deps.db, workspaceId, committed.storageKey)
-        if (existing !== null) {
-          // 同一内容此前已登记：复用同一 asset_id，只把状态刷回 present。
-          markAssetPresent(deps.db, existing.assetId, now)
-          const refreshed = findAssetById(deps.db, existing.assetId) ?? existing
-          return { asset: refreshed, deduplicated: true }
+          })
+          throw new ContractError({
+            code: 'STORAGE_CORRUPT',
+            message: '整对象 sha256 与声明的摘要不符，本次上传已作废。',
+            requestId,
+            detail: {
+              field: 'sha256',
+              expected: declaredSha256,
+              actual: actualSha256,
+              expectedSize: session.declaredSize,
+              actualSize: assembled.byteSize,
+            },
+          })
         }
-        const asset = insertAsset(deps.db, {
-          assetId: newIds.asset(),
-          workspaceId,
-          attachmentId: null,
-          storageKey: committed.storageKey,
-          sha256: actualSha256,
-          byteSize: assembled.byteSize,
-          mimeType: session.declaredMime,
-          originalName: session.declaredName,
-          uploadedByUserId: session.userId,
-          createdAt: now,
-          verifiedAt: now,
+
+        const committed = withStorage(requestId, 'storage_key', () =>
+          storage.commitObject(actualSha256, assembled.absolutePath, assembled.byteSize),
+        )
+
+        const outcome = tx(deps.db, () => {
+          const finishSession = (asset: AssetRow, deduplicated: boolean) => {
+            if (!completeUploadSession(deps.db, uploadId, asset.assetId, now)) {
+              throw stateError(requestId, uploadId, requireSessionRow(requestId, uploadId, workspaceId).status)
+            }
+            return { asset, deduplicated }
+          }
+          const existing = findAssetByStorageKey(deps.db, workspaceId, committed.storageKey)
+          if (existing !== null) {
+            // 同一内容此前已登记：复用同一 asset_id，只把状态刷回 present。
+            markAssetPresent(deps.db, existing.assetId, now)
+            const refreshed = findAssetById(deps.db, existing.assetId) ?? existing
+            return finishSession(refreshed, true)
+          }
+          const asset = insertAsset(deps.db, {
+            assetId: newIds.asset(),
+            workspaceId,
+            attachmentId: null,
+            storageKey: committed.storageKey,
+            sha256: actualSha256,
+            byteSize: assembled.byteSize,
+            mimeType: session.declaredMime,
+            originalName: session.declaredName,
+            uploadedByUserId: session.userId,
+            createdAt: now,
+            verifiedAt: now,
+          })
+          return finishSession(asset, false)
         })
-        return { asset, deduplicated: false }
-      })
 
-      if (!completeUploadSession(deps.db, uploadId, outcome.asset.assetId, now)) {
-        // CAS 失败：说明并发下已被另一个请求标成 completed —— 以库里的 asset_id 为准。
-        const latest = requireSessionRow(requestId, uploadId, workspaceId)
-        if (latest.status === 'completed' && latest.assetId !== null) {
-          cleanupStaging(workspaceId, uploadId)
-          return reply
-            .status(200)
-            .header('cache-control', 'no-store')
-            .send(completedSessionResponse(requestId, workspaceId, uploadId, latest.assetId))
-        }
-        releaseUploadSessionCompleting(deps.db, uploadId)
-        throw stateError(requestId, uploadId, latest.status)
-      }
-
-      cleanupStaging(workspaceId, uploadId)
-      log({
-        event: 'upload.completed',
-        requestId,
-        uploadId,
-        assetId: outcome.asset.assetId,
-        storageKey: outcome.asset.storageKey,
-        byteSize: outcome.asset.byteSize,
-        deduplicated: outcome.deduplicated || committed.deduplicated,
-      })
-
-      return reply.status(200).header('cache-control', 'no-store').send(
-        assetSummary(outcome.asset, {
+        cleanupStaging(workspaceId, uploadId)
+        log({
+          event: 'upload.completed',
+          requestId,
           uploadId,
+          assetId: outcome.asset.assetId,
+          storageKey: outcome.asset.storageKey,
+          byteSize: outcome.asset.byteSize,
           deduplicated: outcome.deduplicated || committed.deduplicated,
-        }),
-      )
+        })
+
+        return reply.status(200).header('cache-control', 'no-store').send(
+          assetSummary(outcome.asset, {
+            uploadId,
+            deduplicated: outcome.deduplicated || committed.deduplicated,
+          }),
+        )
+      } finally {
+        // 失败可重传/重试；已完成或已作废的会话不会被 CAS 重新打开。
+        releaseUploadSessionCompleting(deps.db, uploadId)
+      }
     },
   )
 }

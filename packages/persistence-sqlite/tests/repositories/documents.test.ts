@@ -18,6 +18,7 @@ import {
   getDocument,
   listDocumentTree,
   reorderDocument,
+  softDeleteDocument,
   updateDocumentTitle,
   type DocumentPlacement,
 } from '../../src/repositories/index.js'
@@ -59,6 +60,27 @@ const SUMMARY_KEYS = [
   'charCount',
   'hasChildren',
 ] as const
+
+describe('文档子树删除原子性', () => {
+  it('子节点 CAS 未命中时回滚此前已删除的根节点', () => {
+    const workspaceId = seedWorkspace(db, { id: 'ws_delete_rollback' })
+    const projectId = seedProject(db, { workspaceId, id: 'prj_delete_rollback' })
+    const rootId = insertDocumentRowRaw(db, {
+      id: 'doc_delete_rollback_root', workspaceId, projectId, kind: 'volume', parentId: null, orderKey: 'a0', body: '', title: '卷',
+    })
+    const childId = insertDocumentRowRaw(db, {
+      id: 'doc_delete_rollback_child', workspaceId, projectId, kind: 'chapter', parentId: rootId, orderKey: 'a1', body: '正文', title: '章',
+    })
+    db.exec(`CREATE TRIGGER reject_child_delete BEFORE UPDATE ON documents
+      WHEN OLD.id = 'doc_delete_rollback_child' AND NEW.deleted <> 0 BEGIN SELECT RAISE(IGNORE); END`)
+    const result = softDeleteDocument(db, writeContext(workspaceId), rootId, makeRepoDeps())
+    expectErrCode(result, 'REVISION_CONFLICT')
+    expect(readDocumentRow(db, rootId).deleted).toBe(0)
+    expect(readDocumentRow(db, rootId).revision).toBe(encodeRevision(1))
+    expect(readDocumentRow(db, childId).deleted).toBe(0)
+    db.exec('DROP TRIGGER reject_child_delete')
+  })
+})
 
 describe('listDocumentTree：1000 章规模', () => {
   it(

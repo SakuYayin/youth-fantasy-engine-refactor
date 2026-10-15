@@ -9,7 +9,7 @@
 - Vue 3.5 + Vite 8；渲染进程保持 `nodeIntegration: false`、`contextIsolation: true`、`sandbox: true`。
 - `index.html` 的 CSP **不得放宽**（`default-src 'none'; script-src 'self'; ...`）。新增外部资源一律走系统浏览器。
 - 正文以**纯文本**为兼容基础；编辑器用 CodeMirror 6，且必须藏在 `EditorAdapter` 后面——将来替换编辑器不得改变保存与版本语义。
-- 业务逻辑写在 `.ts` 里（可无头测试），`.vue` 只做渲染；`.vue` 由 `src/renderer/vue-shims.d.ts` 给 tsc 声明，模板正确性由 `@vue/test-utils` 挂载测试兜住。
+- 业务逻辑写在 `.ts` 里（可无头测试），`.vue` 只做渲染；桌面与 UI 使用 `vue-tsc` 检查模板，另有 `@vue/test-utils` 挂载测试。普通 tsc 测试入口保留 `.vue` 声明。
 
 ## D2 `@yfe/client-sdk`（新 workspace）
 
@@ -123,5 +123,5 @@ export interface EditorAdapter {
 
 ## 已知残留
 
-- `vue-tsc` 未接入：`.vue` 模板目前不在 `tsc` 门禁内，靠挂载测试兜底（见 `docs/项目台账.md` 风险表）。
-- Electron 依赖未安装：本机 Electron GUI 有既存环境性崩溃（0xC0000005，纯 Electron 基线也崩），渲染层验收走 `vite build` + vitest，不走真机 GUI。
+- 2026-10-15 审查后已接入 `vue-tsc`：桌面与 UI 的模板纳入类型门禁，并增加写作页挂载测试。
+- Electron 44.7.2 已安装；本机 GUI 启动仍失败，因果来源未定位。`vite build`、组件测试与无 GUI 链路通过，真窗口验收仍为阻塞项。

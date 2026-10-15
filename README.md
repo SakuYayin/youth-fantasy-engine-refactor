@@ -10,6 +10,8 @@
 
 ## 这是什么
 
+开发交接入口：[全仓修复与 Electron 验收流转文档](F:/youth-fantasy-engine-new/docs/流转文档-全仓修复与Electron验收-2026-10-15.md)。
+
 《青春幻想引擎》是一个面向网文作者的**本地优先**创作管理应用：世界观设定、人物关系、大纲、正文编辑、AI 辅助（酒馆/角色推演）、快照与回收站、导入导出、以及 NAS 同步。
 
 原版是 Windows 桌面单体应用（122,414 行 TypeScript / 496 个源文件）。本仓库按重构设计基线重写为 **核心 + 多端** 架构。
@@ -36,7 +38,7 @@
 
 | 端 | 选型 | 说明 |
 | --- | --- | --- |
-| 桌面 | **Electron 44** + **Vue 3.5** + Vite | Windows / macOS / Linux 分平台构建；utilityProcess 跑 DB，主线程不承担耗时工作 |
+| 桌面 | **Electron 44** + **Vue 3.5** + Vite | DB 由独立 worker 持有（当前使用 child_process，兼容 utilityProcess 通信）；主线程不承担耗时工作 |
 | 后端 | **Node.js 24 LTS** + **Fastify 5** + OpenAPI/JSON Schema | 模块化单体，一个服务含 API + Web 管理端 + SQLite + 内部队列；不拆微服务、不要求 Redis |
 | **移动端** | **uni-app x**（原生渲染，蒸汽模式）+ UTS | **仅 Android 首发，不做 iOS**；与桌面共用同一套 `@yfe/contracts` 与后端 API |
 
@@ -110,16 +112,18 @@ docs/                   开发计划、ADR、迁移矩阵
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
 | P0-1 | 工程骨架与工具链 | ✅ 完成 |
-| P0-2 | 契约包（ID / 错误码 / 版本协商） | 🔄 进行中 |
-| P0-3 | 旧功能迁移矩阵（496 文件盘点） | ⬜ 待开始 |
-| P0-4 | Cordis 生命周期验证 | ⬜ 待开始（P0 阻断项） |
-| P0-5 | Electron utilityProcess + DB worker 最小链路 | ⬜ 待开始 |
-| P1-A | SQLite Schema、SaveDraft 事务、恢复、导出 | ⬜ |
-| P1-B | Vue 工作区、CodeMirror 编辑器、内置插件 | ⬜ |
-| P3-A | 身份/设备/权限、Fastify 路由、附件 | ⬜ |
-| P3-B | 同步协议、远程命令、镜像与部署 | ⬜ |
+| P0-2 | 契约包（ID / 错误码 / 版本协商） | ✅ 已实现并回归 |
+| P0-3 | 旧功能迁移矩阵（496 文件盘点） | 🔄 矩阵已建立，完整等价验收待完成 |
+| P0-4 | Cordis 生命周期验证 | ✅ 已验证并补齐清理隔离回归 |
+| P0-5 | DB worker 最小链路 | ✅ 默认沙箱真窗口、中文目录、编辑保存及重启恢复通过 |
+| P1-A | SQLite Schema、SaveDraft 事务、恢复、导出 | ✅ 核心能力已有行为测试 |
+| P1-B | Vue 工作区、CodeMirror 编辑器、内置插件 | 🔄 工作区/编辑器已实现；插件接线与真窗口验收待完成 |
+| P3-A | 身份/设备/权限、Fastify 路由、附件 | 🔄 主要 API 已实现；设备凭据到同步链路尚未贯通 |
+| P3-B | 同步协议、远程命令、镜像与部署 | 🔄 服务端协议/命令已有测试；镜像实际构建待验证 |
 
 详见 [`docs/开发计划.md`](docs/开发计划.md)。
+
+2026-10-15 全仓审查及 Electron 修复：**94 个测试文件 / 1485 条测试通过**，Lint、源码/模板/测试类型检查与生产构建通过。默认沙箱下真实窗口编辑、保存、中文路径和重启恢复通过，见 [`docs/Electron启动与正文保存验收-2026-10-15.md`](docs/Electron启动与正文保存验收-2026-10-15.md)。完整审查及阶段性边界见 [`docs/整体项目检查报告-2026-10-15.md`](docs/整体项目检查报告-2026-10-15.md)。
 
 ---
 
@@ -146,6 +150,11 @@ npm install
 
 # 类型检查
 npm run typecheck
+
+# 完整门禁（先按下文纪律持有测试锁）
+node tools/test-lock.mjs acquire lead
+npm run verify:new
+node tools/test-lock.mjs release lead
 
 # 全量测试（同一时刻只允许一人运行，见并发纪律）
 npm test

@@ -20,7 +20,7 @@
 import {
   ContractError,
   cryptoRandomSource,
-  encodeRevision,
+  newRevision,
   errOf,
   systemClock,
   toErrorPayload,
@@ -64,11 +64,11 @@ export interface RepositoryDeps {
   readonly revisionGenerator: RevisionGenerator
 }
 
-/** 默认依赖：系统时钟 + 密码学随机源 + `encodeRevision`。 */
+/** 默认依赖：系统时钟 + 密码学随机源 + 不透明的唯一 revision。 */
 export const defaultRepositoryDeps: RepositoryDeps = {
   clock: systemClock,
   rng: cryptoRandomSource,
-  revisionGenerator: { next: encodeRevision },
+  revisionGenerator: { next: newRevision },
 }
 
 /**
@@ -125,8 +125,7 @@ export function mapThrown(thrown: unknown, requestId: RequestId, fallbackMessage
 /**
  * 在一个 `BEGIN IMMEDIATE` 写事务里跑 `body`，并把异常翻译成契约错误。
  *
- * - 事务体返回 `Result<T>`：业务失败（如 `REVISION_CONFLICT`）在事务内判定，
- *   返回时事务**正常提交**（没有任何写语句被落下），语义干净；
+ * - 事务体返回 Err 时转为异常，确保此前已执行的写入也全部回滚；
  * - 事务体抛出：整个事务回滚，异常经 {@link mapThrown} 翻译；
  * - 写入前调用 `assertSchemaAcceptsWrites`（库结构版本高于程序支持版本时必须拒绝写入，
  *   绝不"尽力打开"）；缺了这道闸门，旧程序会拿新结构静默破坏数据。
@@ -137,7 +136,11 @@ export function runWrite<T>(
   fallbackMessage: string,
   body: () => Result<T>,
 ): Result<T> {
-  const tx = db.transaction((): Result<T> => body())
+  const tx = db.transaction((): Result<T> => {
+    const result = body()
+    if (!result.ok) throw new ContractError(result.error)
+    return result
+  })
   try {
     assertSchemaAcceptsWrites(db, { requestId })
     const result: Result<T> = tx.immediate()

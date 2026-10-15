@@ -18,17 +18,24 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
-    "verify:new": "npm run typecheck && npm run typecheck:tests && npm run test",
+    "verify:new": "npm run lint && npm run typecheck && npm run typecheck:tests && npm run test && npm run build:renderer -w @yfe/desktop",
     "dev:server": "npm run dev -w @yfe/server",
-    "dev:desktop": "npm run dev -w @yfe/desktop"
+    "dev:desktop": "npm run dev -w @yfe/desktop",
+    "gui-check:desktop": "npm run gui-check -w @yfe/desktop --"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^24.10.1",
     "@vitejs/plugin-vue": "^6.0.10",
     "@vue/test-utils": "^2.5.1",
+    "electron": "^44.7.2",
+    "eslint": "^10.12.0",
+    "eslint-plugin-vue": "^10.11.1",
     "happy-dom": "^21.0.1",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.71.2",
     "vite": "^8.3.4",
-    "vitest": "^4.0.18"
+    "vitest": "^4.0.18",
+    "vue-tsc": "^3.3.13"
   }
 }

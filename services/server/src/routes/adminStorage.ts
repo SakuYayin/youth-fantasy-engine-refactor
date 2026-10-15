@@ -28,7 +28,8 @@
  * 备份列表**只回文件名**。
  */
 
-import { basename } from 'node:path'
+import { realpathSync } from 'node:fs'
+import { basename, resolve } from 'node:path'
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { RequestId, UserId, UtcTimestamp } from '@yfe/contracts'
@@ -557,6 +558,20 @@ export function registerAdminStorageRoutes(app: FastifyInstance, deps: AdminStor
         'targetPath',
       )
 
+      // HTTP 服务仍持有写连接，maintenance 字段只是用户确认，不能关闭 SQLite。
+      // 在线覆盖主库或 WAL/SHM 会让连接继续写旧 inode 或污染恢复文件。
+      const canonicalPath = (path: string): string => {
+        let absolute = resolve(path)
+        try { absolute = realpathSync(absolute) } catch { /* 不存在的旁挂文件按绝对路径比较 */ }
+        return process.platform === 'win32' ? absolute.toLowerCase() : absolute
+      }
+      const protectedPaths = ['', '-wal', '-shm'].map((suffix) => canonicalPath(`${deps.databasePath}${suffix}`))
+      if (protectedPaths.includes(canonicalPath(target.absolutePath))) {
+        fail('RESOURCE_LOCKED', '当前主库仍在使用，请恢复到新路径，停机后再切换数据库。', requestId, {
+          reason: 'active_database_target',
+        })
+      }
+
       // 源必须是一份**校验通过**的备份：恢复前的这次校验就是"最后一道防线"。
       const sourceVerified = await verifyStorageBackup({
         databasePath: source.absolutePath,
@@ -564,6 +579,10 @@ export function registerAdminStorageRoutes(app: FastifyInstance, deps: AdminStor
         requestId,
         allowExternal: source.external || target.external,
       })
+
+      request.yfeNow = deps.now()
+      await deps.guards.requireSession(request, reply)
+      requireAdmin(deps.db, request, requestId)
 
       const restored = await restoreStorageBackup({
         requestId,

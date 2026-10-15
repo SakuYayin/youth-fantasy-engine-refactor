@@ -89,7 +89,7 @@ describe('saveDraft 成功路径', () => {
 })
 
 describe('saveDraft 冲突与授权', () => {
-  it('expectedRevision 过期：REVISION_CONFLICT 透传，且不再开写事务', async () => {
+  it('expectedRevision 过期：由事务端口判定后透传 REVISION_CONFLICT', async () => {
     const harness = createFakeHarness()
     harness.documents.set('doc-1', makeDocument({ revisionSeq: 2 }))
 
@@ -106,7 +106,7 @@ describe('saveDraft 冲突与授权', () => {
     expect(result.error.detail?.currentRevision).toBe(encodeRevision(2))
     expect(result.error.severity).toBe('info')
     expect(result.error.retryable).toBe(true)
-    expect(harness.counts.commitDraft).toBe(0)
+    expect(harness.counts.commitDraft).toBe(1)
   })
 
   it('跨 project 的 payload 被拒：只信库内归属，不信 context 自报', async () => {
@@ -265,6 +265,21 @@ describe('saveDraft 失败不吞掉、不泄漏', () => {
 })
 
 describe('saveDraft 幂等', () => {
+  it('成功回执丢失后，携带原 expectedRevision 重放仍返回首次结果', async () => {
+    const ledger = createMemoryIdempotencyLedger()
+    const harness = createFakeHarness({ clock: fixedClock(TEST_NOW), idempotency: ledger.port })
+    harness.documents.set('doc-1', makeDocument())
+    const input = draftInput({ context: { idempotencyKey: 'lost-response' as IdempotencyKey, expectedRevision: encodeRevision(1) } })
+    const first = await saveDraft(harness.deps, input)
+    expect(first.ok).toBe(true)
+    expect(await saveDraft(harness.deps, input)).toEqual(first)
+    expect(harness.counts.commitDraft).toBe(1)
+    const reused = await saveDraft(harness.deps, { ...input, body: '完全不同的新正文' })
+    expect(reused.ok).toBe(false)
+    if (!reused.ok) expect(reused.error.code).toBe('IDEMPOTENCY_KEY_REUSED')
+    expect(harness.counts.commitDraft).toBe(1)
+  })
+
   it('同一 idempotencyKey 重复调用：端口只提交一次，两次结果完全一致', async () => {
     const ledger = createMemoryIdempotencyLedger()
     const harness = createFakeHarness({ clock: fixedClock(TEST_NOW), idempotency: ledger.port })

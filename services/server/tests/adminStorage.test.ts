@@ -756,6 +756,44 @@ describe('POST /api/v1/admin/storage/backups/verify（校验备份）', () => {
 })
 
 describe('POST /api/v1/admin/storage/backups/restore（恢复：管理员 + 维护模式 + 二次认证）', () => {
+  it.each(['', '-wal', '-shm'])('拒绝在线覆盖当前主库及旁挂文件 %s，保持数据库可用', async (suffix) => {
+    const fixture = await makeStorageFixture()
+    const created = await createBackup(fixture)
+    const response = await fixture.app.inject({
+      method: 'POST', url: RESTORE_URL, headers: bearer(fixture.ownerToken),
+      payload: {
+        backupPath: created.databasePath,
+        targetPath: `${fixture.databasePath}${suffix}`,
+        confirmPassword: 'correct-horse-battery', maintenance: true, overwrite: true,
+      },
+    })
+    expect(response.statusCode).toBe(409)
+    expect(response.json<ErrorBody>().code).toBe('RESOURCE_LOCKED')
+    expect(response.json<ErrorBody>().detail?.reason).toBe('active_database_target')
+    expect(fixture.db.pragma('integrity_check', { simple: true })).toBe('ok')
+  })
+
+  it('最终目标复核失败时恢复原文件，原文件与备份同长度也不能丢失', async () => {
+    const fixture = await makeStorageFixture()
+    const created = await createBackup(fixture)
+    const target = join(fixture.base, 'rollback-target.db')
+    const original = Buffer.alloc(created.bytes, 0x41)
+    writeFileSync(target, original)
+    let checked = 0
+    await expect(restoreStorageBackup({
+      requestId: REQUEST_ID, sourcePath: created.databasePath, targetPath: target, overwrite: true,
+      verifyDatabase: () => {
+        checked += 1
+        if (checked === 2) throw new Error('最终目标复核失败')
+      },
+    })).rejects.toThrow('最终目标复核失败')
+
+    expect(checked).toBe(2)
+    expect(readFileSync(target)).toEqual(original)
+    expect(existsOf(`${target}${BACKUP_RESTORE_TEMP_SUFFIX}`)).toBe(false)
+    expect(readdirSync(fixture.base).filter((name) => name.startsWith('rollback-target.db.previous-'))).toEqual([])
+  })
+
   it('非系统管理员 → 403（密码对、维护模式开着也不行）', async () => {
     const fixture = await makeStorageFixture()
     const created = await createBackup(fixture)

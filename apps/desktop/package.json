@@ -30,7 +30,12 @@
     "vue": "^3.5.44"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev": "node bin/dev-desktop.mjs",
+    "dev:no-sandbox": "node bin/dev-desktop.mjs --no-sandbox",
+    "start": "node bin/dev-desktop.mjs",
+    "gui-check": "node bin/dev-desktop.mjs --gui-check",
+    "gui-check:no-sandbox": "node bin/dev-desktop.mjs --gui-check --no-sandbox",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "self-check": "node src/main/main.mjs --self-check",
     "dev:renderer": "vite --config vite.config.ts",

@@ -15,6 +15,7 @@
 import { defaultKeymap, history, historyKeymap, redo, undo } from '@codemirror/commands'
 import {
   EditorSelection as CmSelection,
+  Compartment,
   EditorState,
   StateEffect,
   StateField,
@@ -56,6 +57,8 @@ export interface CreateCodeMirrorAdapterOptions {
 /** 扩展接口：适配层内部命令面板需要的两个查询方法。 */
 export interface CodeMirrorAdapter extends EditorAdapter {
   readonly documentId: string | null
+  readonly isComposing: boolean
+  setReadOnly(value: boolean): void
   commandNames(): readonly string[]
   runCommand(name: string): boolean
 }
@@ -98,6 +101,7 @@ export function createCodeMirrorAdapter(
   let pendingOpen: EditorOpenOptions | null = null
   let currentDocumentId: string | null = options.documentId ?? null
   const commands = new Map<string, () => boolean>()
+  const editable = new Compartment()
 
   const updateListener = EditorView.updateListener.of((update) => {
     if (!update.docChanged) return
@@ -132,8 +136,7 @@ export function createCodeMirrorAdapter(
     return [
       ...baseExtensions,
       commandKeymap,
-      EditorState.readOnly.of(readOnly),
-      EditorView.editable.of(!readOnly),
+      editable.of([EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly)]),
     ]
   }
 
@@ -186,6 +189,12 @@ export function createCodeMirrorAdapter(
   return {
     get documentId() {
       return currentDocumentId
+    },
+
+    get isComposing() { return composing || view.composing },
+
+    setReadOnly(value: boolean): void {
+      view.dispatch({ effects: editable.reconfigure([EditorState.readOnly.of(value), EditorView.editable.of(!value)]) })
     },
 
     open(target: EditorOpenOptions): void {

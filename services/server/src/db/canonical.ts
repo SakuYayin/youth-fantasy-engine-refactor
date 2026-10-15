@@ -50,7 +50,8 @@ function normalize(value: unknown): unknown {
   }
   if (typeof value === 'object') {
     const source = value as Record<string, unknown>
-    const sorted: Record<string, unknown> = {}
+    // JSON 允许 __proto__ 作为普通键；无原型对象避免赋值触发原型 setter 丢字段。
+    const sorted: Record<string, unknown> = Object.create(null) as Record<string, unknown>
     for (const key of Object.keys(source).sort()) {
       const item = source[key]
       if (item === undefined) {

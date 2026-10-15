@@ -15,6 +15,7 @@
     "jsx": "preserve"
   },
   "include": [
+    "src/**/*.vue",
     "src/**/*.ts",
     "src/**/*.mjs",
     "src/**/*.d.ts"

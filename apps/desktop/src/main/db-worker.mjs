@@ -245,6 +245,7 @@ const DISPATCH = {
   createProject: (payload, requestId) => withApplication(requestId, (deps) => createProjectUseCase(deps, payload)),
   createDocument: (payload, requestId) => withApplication(requestId, (deps) => createDocumentUseCase(deps, payload)),
 };
+const WRITE_METHODS = new Set(['saveDraft', 'createProject', 'createDocument']);
 
 // ---------------------------------------------------------------------------
 // 6) 请求循环
@@ -263,7 +264,21 @@ async function handleRequest(message) {
       respond(requestId, method, errOf('NOT_IMPLEMENTED', `未知的 worker 方法：${String(method)}`, requestId, { method: String(method) }));
       return;
     }
-    const result = await handler(message.payload, requestId);
+    let result;
+    if (db && WRITE_METHODS.has(method)) {
+      // 端口只做本地同步 SQL；异步签名只跨微任务，不在事务内等待网络。
+      // 请求循环串行，业务写入与成功回执要么一起提交，要么一起回滚。
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        result = await handler(message.payload, requestId);
+        db.exec(result.ok ? 'COMMIT' : 'ROLLBACK');
+      } catch (thrown) {
+        if (db.inTransaction) db.exec('ROLLBACK');
+        throw thrown;
+      }
+    } else {
+      result = await handler(message.payload, requestId);
+    }
     respond(requestId, method, result);
   } catch (thrown) {
     // 任何未预期异常都在这里被拦下，绝不裸抛过进程边界。
@@ -303,13 +318,22 @@ async function handleShutdown() {
   }
 }
 
+let requestQueue = Promise.resolve();
+let shutdownQueued = false;
 channel.onMessage((message) => {
   if (message?.kind === 'shutdown') {
-    void handleShutdown();
+    if (!shutdownQueued) {
+      shutdownQueued = true;
+      requestQueue = requestQueue.then(() => handleShutdown());
+    }
     return;
   }
   if (message?.kind === 'request') {
-    void handleRequest(message);
+    if (shutdownQueued) {
+      respond(message.requestId, message.method, errOf('SERVICE_SHUTTING_DOWN', '数据库服务正在关闭', message.requestId));
+      return;
+    }
+    requestQueue = requestQueue.then(() => handleRequest(message));
   }
 });
 

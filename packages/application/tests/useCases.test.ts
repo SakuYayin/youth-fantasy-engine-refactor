@@ -83,6 +83,39 @@ function treeInput(projectId: string): DocumentTreeInput {
 }
 
 describe('createProject', () => {
+  it('同键同参 Promise.all 只创建一次作品，所有并发者返回同一结果', async () => {
+    const ledger = createMemoryIdempotencyLedger()
+    const ids = sequentialIds()
+    const harness = createFakeHarness({ clock: fixedClock(TEST_NOW), ids, idempotency: ledger.port })
+    const input = projectInput({ context: writeContext({ projectId: null, idempotencyKey: 'parallel-project' as IdempotencyKey }) })
+
+    const results = await Promise.all(Array.from({ length: 3 }, () => createProject(harness.deps, input)))
+    expect(results[0]?.ok).toBe(true)
+    expect(results[1]).toEqual(results[0])
+    expect(results[2]).toEqual(results[0])
+    expect(harness.counts.createProject).toBe(1)
+    expect(harness.projects.size).toBe(1)
+    expect(ledger.size()).toBe(1)
+    expect(ids.project() as string).toBe('prj-0002')
+  })
+
+  it('同键异参 Promise.all 拒绝第二份请求，不创建第二个作品', async () => {
+    const ledger = createMemoryIdempotencyLedger()
+    const harness = createFakeHarness({ clock: fixedClock(TEST_NOW), ids: sequentialIds(), idempotency: ledger.port })
+    const input = projectInput({ context: writeContext({ projectId: null, idempotencyKey: 'parallel-project-different' as IdempotencyKey }) })
+
+    const [first, reused] = await Promise.all([
+      createProject(harness.deps, input),
+      createProject(harness.deps, { ...input, name: '另一部作品' }),
+    ])
+    expect(first.ok).toBe(true)
+    expect(reused.ok).toBe(false)
+    if (!reused.ok) expect(reused.error.code).toBe('IDEMPOTENCY_KEY_REUSED')
+    expect(harness.counts.createProject).toBe(1)
+    expect(harness.projects.size).toBe(1)
+    expect(await createProject(harness.deps, input)).toEqual(first)
+  })
+
   it('成功：projectId 由注入的 ids 生成并回传 revision', async () => {
     const harness = createFakeHarness({ clock: fixedClock(TEST_NOW), ids: sequentialIds() })
 
@@ -144,6 +177,37 @@ describe('createProject', () => {
 })
 
 describe('createDocument', () => {
+  it('同键同参 Promise.all 只创建一次文档且不消耗额外 ID', async () => {
+    const ledger = createMemoryIdempotencyLedger()
+    const ids = sequentialIds()
+    const harness = createFakeHarness({ clock: fixedClock(TEST_NOW), ids, idempotency: ledger.port })
+    const input = documentInput({ context: writeContext({ idempotencyKey: 'parallel-document' as IdempotencyKey }) })
+
+    const [first, replay] = await Promise.all([createDocument(harness.deps, input), createDocument(harness.deps, input)])
+    expect(first.ok).toBe(true)
+    expect(replay).toEqual(first)
+    expect(harness.counts.createDocument).toBe(1)
+    expect(harness.documents.size).toBe(1)
+    expect(ids.document() as string).toBe('doc-0002')
+  })
+
+  it('同键异参 Promise.all 拒绝第二份文档请求且保留原回执', async () => {
+    const ledger = createMemoryIdempotencyLedger()
+    const harness = createFakeHarness({ clock: fixedClock(TEST_NOW), ids: sequentialIds(), idempotency: ledger.port })
+    const input = documentInput({ context: writeContext({ idempotencyKey: 'parallel-document-different' as IdempotencyKey }) })
+
+    const [first, reused] = await Promise.all([
+      createDocument(harness.deps, input),
+      createDocument(harness.deps, { ...input, title: '另一章节' }),
+    ])
+    expect(first.ok).toBe(true)
+    expect(reused.ok).toBe(false)
+    if (!reused.ok) expect(reused.error.code).toBe('IDEMPOTENCY_KEY_REUSED')
+    expect(harness.counts.createDocument).toBe(1)
+    expect(harness.documents.size).toBe(1)
+    expect(await createDocument(harness.deps, input)).toEqual(first)
+  })
+
   it('成功：归属校验通过后建章，orderKey 由端口回传', async () => {
     const harness = createFakeHarness({ clock: fixedClock(TEST_NOW), ids: sequentialIds() })
 

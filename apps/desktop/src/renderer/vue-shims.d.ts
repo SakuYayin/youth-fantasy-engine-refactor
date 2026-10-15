@@ -1,10 +1,8 @@
 /**
  * `.vue` 单文件组件的类型声明。
  *
- * 首版**不接 vue-tsc**（ADR 0006 已记录）：模板类型检查不在门禁内，
- * 模板正确性靠挂载测试兜底。这里给出最小声明，让 `import App from './App.vue'`
- * 能通过 tsc；真正的 props/emits 类型在组件里用 `defineProps<...>()` 表达，
- * 由测试运行时校验。
+ * 供普通 tsc 测试入口解析 .vue 导入；桌面和 UI 包使用 vue-tsc 检查模板，
+ * 挂载测试进一步验证运行时接线。
  */
 
 declare module '*.vue' {

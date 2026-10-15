@@ -46,6 +46,19 @@ describe('YfeDialog：渲染、确认/取消、Esc 与焦点陷阱', () => {
     expect(wrapper.get('.yfe-dialog__title').text()).toBe('删除这一章？')
   })
 
+  it('同一应用内两个对话框的标题 ID 唯一并各自关联', () => {
+    const wrapper = track(mount({
+      components: { YfeDialog },
+      template: '<div><YfeDialog :open="true" title="第一个" confirm-label="确认" /><YfeDialog :open="true" title="第二个" confirm-label="确认" /></div>',
+    }, { attachTo: 'body' }))
+    const dialogs = wrapper.findAll('[role="dialog"]')
+    const ids = dialogs.map((dialog) => dialog.attributes('aria-labelledby'))
+    expect(new Set(ids).size).toBe(2)
+    for (const dialog of dialogs) {
+      expect(dialog.get('h2').attributes('id')).toBe(dialog.attributes('aria-labelledby'))
+    }
+  })
+
   it('确认/取消按钮用传入文案，取消未传时兜底为「取消」', () => {
     const wrapper = mountDialog({ open: true, confirmLabel: '保存并关闭' })
     expect(wrapper.get('[data-role="confirm"]').text()).toBe('保存并关闭')

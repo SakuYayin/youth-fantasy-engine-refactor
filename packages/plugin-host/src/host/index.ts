@@ -173,7 +173,9 @@ export class PluginHost {
   constructor(options: PluginHostOptions) {
     this.workspaceId = options.workspaceId
     this.hostApiVersion = options.hostApiVersion ?? PLUGIN_API_VERSION
-    this.cleanupTimeoutMs = options.cleanupTimeoutMs ?? 2000
+    this.cleanupTimeoutMs = typeof options.cleanupTimeoutMs === 'number' && Number.isFinite(options.cleanupTimeoutMs) && options.cleanupTimeoutMs > 0
+      ? options.cleanupTimeoutMs
+      : DEFAULT_CLEANUP_TIMEOUT_MS
     this.trustedPluginIds = new Set(options.trustedPluginIds)
     this.memoryLogger = new MemoryLogger()
     this.logger = options.logger ?? this.memoryLogger
@@ -407,14 +409,17 @@ export class PluginHost {
 
     // 清理钩子：fiber 被外部释放时也能跑一遍我们的清理（幂等）。
     let cleanupHookInstalled = false
+    let rollbackTimedOut = false
     const spawn = await this.runtime.spawn({
       label: pluginId,
       apply: (registration) => {
         registration.registerDisposalHook(async () => {
           if (cleanupHookInstalled) return
           cleanupHookInstalled = true
-          await runtime.tasks.drain(this.cleanupTimeoutMs)
-          await runtime.effects.disposeAllWithTimeout(this.cleanupTimeoutMs)
+          runtime.tasks.closeGate()
+          if (await runtime.tasks.drain(this.cleanupTimeoutMs) === 'timeout') rollbackTimedOut = true
+          const effects = await runtime.effects.disposeAllWithTimeout(this.cleanupTimeoutMs)
+          if (effects.timedOut) rollbackTimedOut = true
           this.contributions.releasePlugin(pluginId)
         })
         return record.plugin.activate(runtime.context)
@@ -427,13 +432,23 @@ export class PluginHost {
         spawn.error instanceof Error ? spawn.error.message : `插件 ${pluginId} 激活失败`
       const reason = spawn.reason === 'activation-threw' ? 'activation-threw' : 'dependency-not-active'
       // 🔴 激活失败必须回滚：释放 fiber + 清理已注册的副作用，宿主继续服务其它插件。
-      if (spawn.fiber) await spawn.fiber.dispose(this.cleanupTimeoutMs)
-      await runtime.effects.disposeAllWithTimeout(this.cleanupTimeoutMs)
+      runtime.tasks.closeGate()
+      if (spawn.fiber) {
+        const disposed = await spawn.fiber.dispose(this.cleanupTimeoutMs)
+        if (disposed.status !== 'disposed') rollbackTimedOut = true
+      }
+      if (await runtime.tasks.drain(this.cleanupTimeoutMs) === 'timeout') rollbackTimedOut = true
+      const effects = await runtime.effects.disposeAllWithTimeout(this.cleanupTimeoutMs)
+      if (effects.timedOut) rollbackTimedOut = true
       this.contributions.releasePlugin(pluginId)
       record.runtime = null
       record.retiredTasks = runtime.tasks
       record.retiredEffects = runtime.effects
       this.markFailed(record, reason)
+      if (rollbackTimedOut) {
+        record.state = 'quarantined'
+        record.lastFailure = 'cleanup-timeout'
+      }
       this.logger.error('plugin activation failed', { pluginId, reason, message })
       return err(activationFailedPayload(pluginId, reason, message, requestId, { activationError: message }))
     }
@@ -476,16 +491,16 @@ export class PluginHost {
     const requestId = options.requestId ?? newIds.request()
     const record = this.records.get(pluginId)
     if (!record) return err(notFoundPayload(pluginId, requestId))
-    if (record.state === 'disabled') {
+    if (record.state === 'disabled' || record.state === 'quarantined') {
       // 幂等：重复禁用不算错误（发布门禁要求「重复卸载」可用）。
       return ok({
         pluginId,
-        state: 'disabled',
+        state: record.state,
         drain: 'idle',
         effectsAttempted: 0,
         effectsFailed: 0,
         contributionsReleased: 0,
-        cleanupTimedOut: false,
+        cleanupTimedOut: record.state === 'quarantined',
         elapsedMs: 0,
       })
     }
@@ -521,12 +536,12 @@ export class PluginHost {
     }
 
     // 3：插件自己的 deactivate。抛错不阻断后续清理。
-    try {
-      await record.plugin.deactivate?.()
-    } catch (error) {
+    const deactivated = await boundedCleanup(() => record.plugin.deactivate?.(), this.cleanupTimeoutMs)
+    if (deactivated.status === 'timeout') cleanupTimedOut = true
+    if (deactivated.status === 'threw') {
       this.logger.error('plugin deactivate threw', {
         pluginId,
-        message: error instanceof Error ? error.message : String(error),
+        message: deactivated.error instanceof Error ? deactivated.error.message : String(deactivated.error),
       })
     }
 
@@ -633,6 +648,9 @@ export class PluginHost {
       if (record.runtime) {
         pendingTasks += record.runtime.tasks.activeCount
         liveEffects += record.runtime.effects.size
+      } else if (record.state === 'quarantined') {
+        pendingTasks += record.retiredTasks?.activeCount ?? 0
+        liveEffects += record.retiredEffects?.size ?? 0
       }
     }
     return {
@@ -675,3 +693,16 @@ export function defineCandidate(manifest: unknown, plugin: ProductPlugin): Plugi
 
 /** 暴露给上层的默认清理超时（毫秒），供 UI 侧的提示文案复用。 */
 export const DEFAULT_CLEANUP_TIMEOUT_MS = 2000
+
+type CleanupOutcome = { readonly status: 'done' } | { readonly status: 'timeout' } | { readonly status: 'threw'; readonly error: unknown }
+
+/** 插件生命周期回调与 effects 一样可能永久挂起；迟到拒绝也必须被接住。 */
+async function boundedCleanup(body: () => void | Promise<void>, timeoutMs: number): Promise<CleanupOutcome> {
+  return new Promise<CleanupOutcome>((resolve) => {
+    const timer = setTimeout(() => resolve({ status: 'timeout' }), timeoutMs)
+    Promise.resolve().then(body).then(
+      () => { clearTimeout(timer); resolve({ status: 'done' }) },
+      (error: unknown) => { clearTimeout(timer); resolve({ status: 'threw', error }) },
+    )
+  })
+}

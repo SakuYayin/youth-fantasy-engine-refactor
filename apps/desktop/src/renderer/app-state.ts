@@ -134,7 +134,7 @@ export interface AppState {
   selectDocument(documentId: string): Promise<boolean>
   edit(body: string): void
   /** 切章 / 关窗前调用：把待保存的草稿冲刷掉。 */
-  flush(): Promise<void>
+  flush(): Promise<boolean>
   /**
    * 收到外部（同步/别处编辑）版本时调用。
    *
@@ -145,6 +145,7 @@ export interface AppState {
   retrySave(): void
   resolveConflict(resolution: ConflictResolution): void
   toggleExpanded(documentId: string): void
+  setNavigationGuard(guard: (() => boolean) | null): void
   dispose(): void
 }
 
@@ -185,6 +186,8 @@ export function createAppState(deps: AppStateDeps): AppState {
   let expandedIds: readonly string[] = []
   let session: DraftSession | null = null
   let disposed = false
+  let navigation: Promise<void> = Promise.resolve()
+  let navigationGuard: (() => boolean) | null = null
 
   const listeners = new Set<(snapshot: AppSnapshot) => void>()
 
@@ -296,7 +299,13 @@ export function createAppState(deps: AppStateDeps): AppState {
       },
       {
         save: (request) => commitDraft(documentIdValue, request),
-        onStateChange: () => emit(),
+        onStateChange: (next) => {
+          if (session?.getSnapshot().sessionId !== next.sessionId) return
+          body = next.body
+          charCount = countChars(body)
+          revision = next.revision
+          emit()
+        },
         ...(deps.debounceMs === undefined ? {} : { debounceMs: deps.debounceMs }),
         ...(deps.maxWaitMs === undefined ? {} : { maxWaitMs: deps.maxWaitMs }),
       },
@@ -312,7 +321,7 @@ export function createAppState(deps: AppStateDeps): AppState {
         projectId: (projectId ?? null) as ProjectId | null,
         expectedRevision: request.expectedRevision as Revision,
         // 同一草稿序号的重复提交必须命中同一幂等键（重放返回同一结果，绝不二次写入）。
-        idempotencyKey: `draft:${documentIdValue}:${request.draftSequence}` as IdempotencyKey,
+        idempotencyKey: `draft_${request.sessionId}_${documentIdValue}_${request.draftSequence}` as IdempotencyKey,
       },
       documentId: documentIdValue as DocumentId,
       draftSequence: request.draftSequence,
@@ -320,16 +329,20 @@ export function createAppState(deps: AppStateDeps): AppState {
       sessionId: request.sessionId,
     }
     const result = await deps.client.saveDraft(input)
+    const active = session?.getSnapshot()
+    const isCurrent = !disposed && active?.sessionId === request.sessionId &&
+      active.inFlightSequence === request.draftSequence && active.revision === request.expectedRevision
     if (!result.ok) {
-      noteFailure(result.error.code, result.error.message)
-      emit()
+      if (isCurrent) {
+        noteFailure(result.error.code, result.error.message)
+        emit()
+      }
       return { ok: false, draftSequence: request.draftSequence, code: result.error.code }
     }
-    noteSuccess()
-    revision = result.value.revision
-    charCount = result.value.charCount
-    lastSavedAt = result.value.savedAt
-    emit()
+    if (isCurrent) {
+      noteSuccess()
+      lastSavedAt = result.value.savedAt
+    }
     return {
       ok: true,
       draftSequence: result.value.draftSequence,
@@ -365,6 +378,8 @@ export function createAppState(deps: AppStateDeps): AppState {
       emit()
       return false
     }
+    // 读取期间仍可能有键入；确认旧会话全部保存后才能替换。
+    if (!await flushCurrent()) return false
     noteSuccess()
     title = result.value.document.title
     body = result.value.body
@@ -380,6 +395,37 @@ export function createAppState(deps: AppStateDeps): AppState {
     if (chapter !== undefined) return String(chapter.id)
     const anyAlive = documents.find((document) => document.deleted === 0)
     return anyAlive === undefined ? null : String(anyAlive.id)
+  }
+
+  async function flushCurrent(): Promise<boolean> {
+    const current = session
+    const deadline = Date.now() + 15_000
+    while (current !== null) {
+      await current.flush()
+      const snapshot = current.getSnapshot()
+      if (disposed || session !== current) return false
+      if (snapshot.conflict !== null || snapshot.status === 'error') return false
+      if (!snapshot.hasUnsavedChanges && snapshot.inFlightSequence === null) return true
+      if (Date.now() >= deadline) return false
+    }
+    return true
+  }
+
+  function navigate(action: () => Promise<boolean>): Promise<boolean> {
+    const task = navigation.then(async () => {
+      if (disposed) return false
+      if (navigationGuard?.() === false) {
+        noteFailure('STATE_INVALID_TRANSITION', '请先完成当前输入，再切换作品或章节。')
+        emit()
+        return false
+      }
+      loading = true
+      emit()
+      try { return await action() }
+      finally { loading = false; emit() }
+    })
+    navigation = task.then(() => {}, () => {})
+    return task
   }
 
   return {
@@ -421,6 +467,8 @@ export function createAppState(deps: AppStateDeps): AppState {
     },
 
     async createProject(name: string): Promise<boolean> {
+      return navigate(async () => {
+      if (!await flushCurrent()) return false
       const input: ProjectCreateInput = {
         context: {
           requestId: deps.newRequestId() as RequestId,
@@ -437,6 +485,7 @@ export function createAppState(deps: AppStateDeps): AppState {
         emit()
         return false
       }
+      if (!await flushCurrent()) return false
       noteSuccess()
       projectId = String(result.value.projectId)
       deps.projectStore.write(projectId)
@@ -453,9 +502,12 @@ export function createAppState(deps: AppStateDeps): AppState {
       if (target !== null) await loadDocument(target)
       emit()
       return true
+      })
     },
 
     async createChapter(chapterTitle: string): Promise<boolean> {
+      return navigate(async () => {
+      if (!await flushCurrent()) return false
       if (projectId === null) {
         noteFailure('VALIDATION_MISSING_FIELD', '还没有作品，先新建作品再建章节。')
         emit()
@@ -482,31 +534,37 @@ export function createAppState(deps: AppStateDeps): AppState {
       }
       noteSuccess()
       await loadTree()
-      await loadDocument(String(result.value.documentId))
+      const opened = await loadDocument(String(result.value.documentId))
       emit()
-      return true
+      return opened
+      })
     },
 
     async selectDocument(documentIdValue: string): Promise<boolean> {
+      return navigate(async () => {
       if (documentIdValue === selectedDocumentId && session !== null) return true
       // 切章前先冲刷：否则防抖窗口里的输入会跟着新章节一起被丢掉。
-      await session?.flush()
+      if (!await flushCurrent()) return false
       const loaded = await loadDocument(documentIdValue)
       emit()
       return loaded
+      })
     },
 
     edit(nextBody: string): void {
-      if (session === null) return
+      if (session === null || loading || readOnly || disposed) return
       body = nextBody
       charCount = countChars(nextBody)
       session.onInput(nextBody)
       emit()
     },
 
-    async flush(): Promise<void> {
-      await session?.flush()
+    async flush(): Promise<boolean> {
+      await navigation
+      if (navigationGuard?.() === false) return false
+      const saved = await flushCurrent()
       emit()
+      return saved
     },
 
     applyExternalUpdate(update): boolean {
@@ -541,6 +599,8 @@ export function createAppState(deps: AppStateDeps): AppState {
         : [...expandedIds, documentIdValue]
       emit()
     },
+
+    setNavigationGuard(guard): void { navigationGuard = guard },
 
     dispose(): void {
       disposed = true

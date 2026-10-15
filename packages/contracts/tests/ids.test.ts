@@ -17,10 +17,22 @@ import {
   isWellFormedId,
   makeId,
   newIds,
+  newRevision,
   resolveConflict,
   systemClock,
 } from '../src/ids.js'
 import type { Cursor, Revision, WorkspaceId } from '../src/ids.js'
+
+describe('跨离线副本 revision 身份', () => {
+  it('相同库内序号在不同副本上生成不同标识，仍按相等关系裁决冲突', () => {
+    const first = newRevision(2, { uuid: () => 'device-a-random-id' })
+    const second = newRevision(2, { uuid: () => 'device-b-random-id' })
+    expect(first).not.toBe(second)
+    expect(resolveConflict({ baseRevision: encodeRevision(1), localRevision: first, remoteRevision: second }).kind).toBe('conflict')
+    expect(newRevision(2)).not.toBe(newRevision(2))
+    expect(() => newRevision(Number.MAX_SAFE_INTEGER + 1)).toThrow(RangeError)
+  })
+})
 
 // ---------------------------------------------------------------------------
 // 标识符

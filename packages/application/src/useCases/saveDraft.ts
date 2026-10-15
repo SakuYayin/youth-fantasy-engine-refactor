@@ -102,24 +102,15 @@ export async function saveDraft(
     const denied = authorize(ownership, context.value.workspaceId, context.value.projectId, requestId)
     if (denied !== null) return denied
 
-    // 4) expectedRevision 预检（快速失败；权威判定在适配器事务内）
-    const expected = context.value.expectedRevision
-    if (expected !== null && expected !== ownership.revision) {
-      const conflict = errOf('REVISION_CONFLICT', REVISION_CONFLICT_MESSAGE, requestId, {
-        expectedRevision: expected,
-        currentRevision: ownership.revision,
-      })
-      return errFrom(conflict.error, requestId)
-    }
-
     // 5) 提交：时钟由用例注入（适配器不得自己取时间），幂等键在本层解析与缓存
     const committed = await withIdempotency(
       deps.persistence.idempotency,
       SAVE_DRAFT_SCOPE,
       context.value.idempotencyKey,
       requestId,
-      () =>
-        callPort(
+      () => {
+        // 版本判定与水位线重放均在事务内，授权始终先于幂等回执。
+        return callPort(
           () =>
             deps.persistence.draft.commitDraft({
               input: {
@@ -134,7 +125,10 @@ export async function saveDraft(
             }),
           requestId,
           '草稿提交失败',
-        ),
+        )
+      },
+      JSON.stringify([context.value.workspaceId, context.value.projectId, documentId.value,
+        context.value.expectedRevision, sessionId.value, draftSequence.value, body.value]),
     )
     if (!committed.ok) return committed
 

@@ -115,6 +115,33 @@ describe('幂等重跑', () => {
 })
 
 describe('目标库保护', () => {
+  it.each([true, false])('合库时同 ID 的项目归属冲突被拒绝且所有原行保持不变（dryRun=%s）', async (dryRun) => {
+    const plan = buildImportPlan(await syntheticCollection(), { now: TEST_NOW })
+    const workspace = plan.rows.find((row) => row.table === 'workspace')
+    const project = plan.rows.find((row) => row.table === 'project')
+    if (workspace?.table !== 'workspace' || project?.table !== 'project') throw new Error('missing fixture')
+    const incoming = {
+      ...plan,
+      workspaceId: 'ws_other_import',
+      rows: [
+        { ...workspace, id: 'ws_other_import' },
+        { ...project, workspaceId: 'ws_other_import', name: '不得覆盖的名字' },
+      ],
+    }
+    await withDbAsync(async (db) => {
+      expect(writeImportPlan(db, plan, { requestId: requestId(60), now: TEST_NOW }).ok).toBe(true)
+      const before = TABLES.map((table) => db.prepare(`SELECT * FROM ${table}`).all())
+      const result = writeImportPlan(db, incoming, {
+        requestId: requestId(61), now: TEST_NOW, allowNonEmptyTarget: true, dryRun,
+      })
+      expect(result.ok).toBe(false)
+      if (result.ok) return
+      expect(result.error.code).toBe('ALREADY_EXISTS')
+      expect(result.error.detail?.['reason']).toBe('import-owner-conflict')
+      expect(TABLES.map((table) => db.prepare(`SELECT * FROM ${table}`).all())).toEqual(before)
+    })
+  })
+
   it('库结构版本过新 → 拒绝导入并给出契约错误码 STORAGE_SCHEMA_TOO_NEW', async () => {
     const plan = buildImportPlan(await syntheticCollection(), { now: TEST_NOW })
     await withDbAsync(async (db) => {

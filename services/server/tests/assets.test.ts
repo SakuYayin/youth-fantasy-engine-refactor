@@ -173,6 +173,15 @@ function insertHostileAsset(storageKey: string): string {
 }
 
 describe('下载资产', () => {
+  it('缺少原文件名时仍强制 attachment，客户端声明 HTML 不能内联执行', async () => {
+    const asset = await uploadAsset(ORIGINAL, { declaredMime: 'text/html' })
+    const res = await ctx.app.inject({ method: 'GET', url: assetsUrl(asset.assetId), headers: bearer(ctx.token) })
+    expect(res.statusCode).toBe(200)
+    expect(String(res.headers['content-disposition'])).toContain('attachment;')
+    expect(String(res.headers['content-disposition'])).toContain(`${asset.assetId}.bin`)
+    expect(res.rawPayload).toEqual(ORIGINAL)
+  })
+
   it('按 storage_key 读盘，字节与头部都对', async () => {
     const asset = await uploadAsset(ORIGINAL, {
       declaredName: '报告.txt',

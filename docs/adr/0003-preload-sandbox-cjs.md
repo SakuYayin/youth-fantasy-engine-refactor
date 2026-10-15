@@ -4,6 +4,8 @@
 - 相关：重构开发文档 `02-桌面与界面.md`（安全设置）、`04-后端与安全.md`、`docs/adr/0001-sqlite-native-driver.md`
 - 决策者：Lead
 
+> 2026-10-15 审查校正：沙箱 preload 的 `require` 同样不能加载本地 CJS 文件。现改为自包含白名单，仅 `require('electron')`；main 仍使用 CJS 副本。`preload.test.ts` 在只允许 Electron 的受限加载环境中执行真实 preload，并与 TS 白名单比对。下方原决策中“preload require 白名单副本”与“否决内联白名单”的部分已由本校正取代。依据：[Electron 沙箱文档](https://www.electronjs.org/docs/latest/tutorial/sandbox)。
+
 ## 背景
 
 设计文档 02 要求 renderer 的安全三元组逐项写死：

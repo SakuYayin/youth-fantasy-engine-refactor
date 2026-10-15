@@ -388,7 +388,7 @@ function isoOr(value: string | null, fallback: string): string {
 }
 
 /** JSON 安全化：丢掉不可序列化的东西，循环引用替换为标记。 */
-function jsonSafe(value: unknown, seen: Set<object> = new Set()): unknown {
+function jsonSafe(value: unknown, seen: Set<object> = new Set(), onRedact?: (field: string) => void): unknown {
   if (value === null) return null
   const type = typeof value
   if (type === 'string' || type === 'boolean') return value
@@ -396,7 +396,11 @@ function jsonSafe(value: unknown, seen: Set<object> = new Set()): unknown {
   if (type === 'undefined') return '[undefined]'
   if (type === 'function' || type === 'symbol' || type === 'bigint') return `[${type}]`
   if (Array.isArray(value)) {
-    return value.map((item) => jsonSafe(item, seen))
+    if (seen.has(value)) return '[circular]'
+    seen.add(value)
+    const result = value.map((item) => jsonSafe(item, seen, onRedact))
+    seen.delete(value)
+    return result
   }
   if (type === 'object') {
     const object = value as object
@@ -404,7 +408,12 @@ function jsonSafe(value: unknown, seen: Set<object> = new Set()): unknown {
     seen.add(object)
     const out: Record<string, unknown> = {}
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = jsonSafe(item, seen)
+      const sensitive = isSensitiveField(key) || SENSITIVE_META_KEYS.has(key)
+      if (sensitive) onRedact?.(key)
+      Object.defineProperty(out, key, {
+        value: sensitive ? '[redacted]' : jsonSafe(item, seen, onRedact),
+        enumerable: true, configurable: true, writable: true,
+      })
     }
     seen.delete(object)
     return out
@@ -434,6 +443,23 @@ function locationOf(ref: LegacyOriginRef): string {
   return ref.qualifier === null
     ? `${ref.sourceId}/${ref.database}/${ref.store}/${ref.legacyId}`
     : `${ref.sourceId}/${ref.database}/${ref.store}/${ref.legacyId}#${ref.qualifier}`
+}
+
+/** 引用先按来源解析；知识库等独立来源仅能回退到全局唯一的旧键。 */
+class SourceLookup<T> {
+  private readonly values = new Map<string, Map<string, T>>()
+
+  set(legacyId: string, value: T, sourceId: string): void {
+    const sources = this.values.get(legacyId) ?? new Map<string, T>()
+    sources.set(sourceId, value)
+    this.values.set(legacyId, sources)
+  }
+
+  get(legacyId: string, sourceId: string): T | undefined {
+    const sources = this.values.get(legacyId)
+    if (sources?.has(sourceId)) return sources.get(sourceId)
+    return sources?.size === 1 ? sources.values().next().value : undefined
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -589,10 +615,10 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
   })
 
   // ---- 索引：旧 ID → 新 ID（跨 store 引用解析用） ----
-  const projectIdByLegacy = new Map<string, string>()
-  const volumeIdByLegacy = new Map<string, string>()
-  const documentIdByLegacy = new Map<string, { readonly projectId: string; readonly kind: DocumentKind }>()
-  const settingsEntityIdByLegacy = new Map<string, string>()
+  const projectIdByLegacy = new SourceLookup<string>()
+  const volumeIdByLegacy = new SourceLookup<string>()
+  const documentIds = new SourceLookup<string>()
+  const settingsEntityIdByLegacy = new SourceLookup<string>()
   const projectRefByProjectId = new Map<string, LegacyOriginRef>()
 
   const storeData = (name: string) =>
@@ -620,7 +646,7 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
         entityId,
         field,
         disposition,
-        value: jsonSafe(value),
+        value: isSensitiveField(field) || SENSITIVE_META_KEYS.has(field) ? '[redacted]' : jsonSafe(value),
       })
     }
   }
@@ -657,7 +683,7 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
         qualifier: null,
       }
       const projectId = assignId(registry, 'project', 'prj', ref, legacyId)
-      projectIdByLegacy.set(legacyId, projectId)
+      projectIdByLegacy.set(legacyId, projectId, source.sourceId)
       projectRefByProjectId.set(projectId, ref)
       const { unknownValues } = splitUnknown(record, KNOWN_PROJECT_FIELDS)
       rows.push({
@@ -707,7 +733,7 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
       const ref: LegacyOriginRef = { sourceId: source.sourceId, database: 'main', store: 'volumes', legacyId, qualifier: null }
       const documentId = assignId(registry, 'document', 'vol', ref, legacyId)
       const legacyProjectId = str(record, 'projectId')
-      const projectId = legacyProjectId === null ? null : (projectIdByLegacy.get(legacyProjectId) ?? null)
+      const projectId = legacyProjectId === null ? null : (projectIdByLegacy.get(legacyProjectId, source.sourceId) ?? null)
       if (legacyProjectId !== null && projectId === null) {
         warn(locationOf(ref), 'unknown-project', `卷引用的作品「${legacyProjectId}」不在本次导入范围内，其父级留空。`)
       }
@@ -760,11 +786,8 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
       const ref: LegacyOriginRef = { sourceId: source.sourceId, database: 'main', store: 'chapters', legacyId, qualifier: null }
       const documentId = assignId(registry, 'document', 'doc', ref, legacyId)
       const legacyProjectId = str(record, 'projectId')
-      const projectId = legacyProjectId === null ? null : (projectIdByLegacy.get(legacyProjectId) ?? null)
+      const projectId = legacyProjectId === null ? null : (projectIdByLegacy.get(legacyProjectId, source.sourceId) ?? null)
       const legacyVolumeId = str(record, 'volumeId')
-      if (legacyVolumeId !== null && !volumeIdByLegacy.has(legacyVolumeId)) {
-        // 卷可能还没轮到处理；延后到卷全部就绪后再判，见下方 fixup。
-      }
       const rawBody = str(record, 'content') ?? ''
       const report = normalizeBodyReport(rawBody)
       const { unknownValues } = splitUnknown(record, KNOWN_CHAPTER_FIELDS)
@@ -790,17 +813,17 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
 
   // 卷先入索引，章节才能解析 parentId。
   for (const volume of pendingVolumes) {
-    volumeIdByLegacy.set(volume.legacyId, volume.documentId)
+    volumeIdByLegacy.set(volume.legacyId, volume.documentId, volume.ref.sourceId)
+    documentIds.set(volume.legacyId, volume.documentId, volume.ref.sourceId)
   }
+  for (const chapter of pendingChapters) documentIds.set(chapter.legacyId, chapter.documentId, chapter.ref.sourceId)
 
   /**
    * 旧卷 ID 或旧章节 ID → 新 `documents.id`。
    * 快照与回收站都用它归位；两处共用同一张表，避免「快照认得章节、回收站认不得」这类分叉。
    */
-  const documentIdForLegacy = (legacyId: string): string | null =>
-    volumeIdByLegacy.get(legacyId) ??
-    pendingChapters.find((chapter) => chapter.legacyId === legacyId)?.documentId ??
-    null
+  const documentIdForLegacy = (legacyId: string, sourceId: string): string | null =>
+    documentIds.get(legacyId, sourceId) ?? null
 
   // order_key：按旧 `order` 排序后批量取键（`spreadOrderKeys` 是唯一的批量入口）。
   const orderKeyByDocumentId = new Map<string, string>()
@@ -834,7 +857,6 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
       warn(locationOf(volume.ref), 'unsupported-shape', '卷未取得排序键，已跳过（不静默生成 0 条）。')
       continue
     }
-    documentIdByLegacy.set(volume.legacyId, { projectId: volume.projectId ?? '', kind: 'volume' })
     rows.push({
       table: 'document',
       id: volume.documentId,
@@ -866,7 +888,7 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
     }
     let parentId: string | null = null
     if (chapter.legacyVolumeId !== null) {
-      parentId = volumeIdByLegacy.get(chapter.legacyVolumeId) ?? null
+      parentId = volumeIdByLegacy.get(chapter.legacyVolumeId, chapter.ref.sourceId) ?? null
       if (parentId === null) {
         warn(
           locationOf(chapter.ref),
@@ -876,7 +898,6 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
         recordUnknown(chapter.ref, 'document', chapter.documentId, { volumeId: chapter.legacyVolumeId }, 'raw_payload')
       }
     }
-    documentIdByLegacy.set(chapter.legacyId, { projectId: chapter.projectId ?? '', kind: 'chapter' })
     rows.push({
       table: 'document',
       id: chapter.documentId,
@@ -970,7 +991,7 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
           return
         }
         const legacyProjectId = str(record, 'projectId')
-        const projectId = legacyProjectId === null ? null : (projectIdByLegacy.get(legacyProjectId) ?? null)
+        const projectId = legacyProjectId === null ? null : (projectIdByLegacy.get(legacyProjectId, source.sourceId) ?? null)
         if (legacyProjectId !== null && projectId === null) {
           warn(locationOf(ref), 'unknown-project', `${storeName} 记录引用的作品「${legacyProjectId}」不在本次导入范围内。`)
         }
@@ -978,7 +999,7 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
         const entityId = assignId(registry, 'settings_entity', templateId.startsWith('char-') ? 'chr' : 'set', ref, legacyId)
         // 🔴 用**原始旧 ID** 作键：派生 relations 时拿到的引用值就是原始旧 ID
         //    （`${storeName}:${legacyId}` 那种复合键在引用解析里永远查不到，等于关系全丢）。
-        settingsEntityIdByLegacy.set(legacyId, entityId)
+        settingsEntityIdByLegacy.set(legacyId, entityId, source.sourceId)
         pendingEntities.push({
           ref,
           projectId,
@@ -1020,14 +1041,14 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
       const cardTabId = str(record, 'tabId') ?? ''
       const isCharacterCard = (LEGACY_CHARACTER_TEMPLATE_IDS as readonly string[]).includes(cardTabId)
       const legacyProjectId = str(record, 'projectId')
-      const projectId = legacyProjectId === null ? null : (projectIdByLegacy.get(legacyProjectId) ?? null)
+      const projectId = legacyProjectId === null ? null : (projectIdByLegacy.get(legacyProjectId, source.sourceId) ?? null)
       const data = asRecord(record['data']) ?? {}
       // 旧版把人物卡子项存成**独立记录**，`tabId` 带 `-sub` 后缀
       // （`upstream/src/lib/app/codeRefs.ts:106`：「子项挂在 `<tabId>-sub` 下」）。
       const isSubRecord = cardTabId.endsWith('-sub')
       const baseCardTabId = isSubRecord ? cardTabId.slice(0, -'-sub'.length) : cardTabId
       const parentId = assignId(registry, 'settings_entity', 'chr', ref, legacyId)
-      settingsEntityIdByLegacy.set(legacyId, parentId)
+      settingsEntityIdByLegacy.set(legacyId, parentId, source.sourceId)
 
       // 立绘 dataURL：迁移矩阵 M-06 要求外置成 assets + asset_refs。
       // 本包不落二进制（只读解析层不写任何文件），因此**原样保留在 values_json**，
@@ -1107,7 +1128,7 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
   for (const link of pendingSubLinks) {
     const legacyParentId = link.legacyParentId
     if (legacyParentId === null || legacyParentId === '') continue
-    const parentNewId = settingsEntityIdByLegacy.get(legacyParentId)
+    const parentNewId = settingsEntityIdByLegacy.get(legacyParentId, link.entity.ref.sourceId)
     if (parentNewId === undefined) {
       warn(
         locationOf(link.entity.ref),
@@ -1172,7 +1193,7 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
       const split = rawKey.indexOf('::')
       const legacyProjectId = split >= 0 ? rawKey.slice(0, split) : null
       const key = split >= 0 ? rawKey.slice(split + 2) : rawKey
-      const projectId = legacyProjectId === null ? '' : (projectIdByLegacy.get(legacyProjectId) ?? '')
+      const projectId = legacyProjectId === null ? '' : (projectIdByLegacy.get(legacyProjectId, source.sourceId) ?? '')
       if (legacyProjectId !== null && projectId === '') {
         warn(`${source.sourceId}/main/settingsKV/${rawKey}`, 'unknown-project', `settingsKV 键前缀指向未知作品「${legacyProjectId}」。`)
       }
@@ -1250,7 +1271,7 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
       const legacyId = legacyKeyOf(record, store.keyField, `#${index}`)
       const ref: LegacyOriginRef = { sourceId: source.sourceId, database: 'main', store: 'snapshots', legacyId, qualifier: null }
       const target = str(record, 'chapterId') ?? str(record, 'documentId') ?? str(record, 'entityId')
-      const targetDocumentId = target === null ? null : documentIdForLegacy(target)
+      const targetDocumentId = target === null ? null : documentIdForLegacy(target, source.sourceId)
       if (target === null || targetDocumentId === null) {
         warn(locationOf(ref), 'unsupported-shape', '快照未指向本次导入中的章节/卷，无法归位，已原样登记而不写入。')
         deferred.push({ location: locationOf(ref), reason: '快照目标不在导入范围内' })
@@ -1321,7 +1342,7 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
       const legacyId =
         record === null ? `#${index}` : (str(record, 'id') ?? str(record, 'entityId') ?? legacyKeyOf(record, store.keyField, `#${index}`))
       const ref: LegacyOriginRef = { sourceId: source.sourceId, database: 'main', store: 'trash', legacyId, qualifier: null }
-      const documentId = documentIdForLegacy(legacyId)
+      const documentId = documentIdForLegacy(legacyId, source.sourceId)
       if (documentId === null) {
         warn(locationOf(ref), 'unsupported-shape', '回收站条目未指向本次导入中的文档，已原样登记而不改动任何行。')
         deferred.push({ location: locationOf(ref), reason: '回收站目标不在导入范围内' })
@@ -1336,7 +1357,7 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
   // =====================================================================
   // M-16 / M-19 知识库 → documents(kind='note')（bodies 是不可再生的用户正文）
   // =====================================================================
-  const kbBodyByDocId = new Map<string, string>()
+  const kbBodyByDocId = new SourceLookup<string>()
   for (const { source, store } of storeData(LEGACY_KB_STORE.bodies)) {
     store.records.forEach((raw, index) => {
       const record = asRecord(raw)
@@ -1346,7 +1367,7 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
       }
       const docId = str(record, 'docId') ?? str(record, 'id') ?? legacyKeyOf(record, store.keyField, `#${index}`)
       const body = str(record, 'content') ?? str(record, 'body') ?? str(record, 'text')
-      if (body !== null) kbBodyByDocId.set(docId, body)
+      if (body !== null) kbBodyByDocId.set(docId, body, source.sourceId)
     })
   }
   for (const { source, store } of storeData(LEGACY_KB_STORE.docs)) {
@@ -1359,12 +1380,13 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
       const legacyId = legacyKeyOf(record, store.keyField, `#${index}`)
       const ref: LegacyOriginRef = { sourceId: source.sourceId, database: 'kb', store: 'docs', legacyId, qualifier: null }
       const documentId = assignId(registry, 'document', 'doc', ref, legacyId)
-      const rawBody = kbBodyByDocId.get(legacyId) ?? str(record, 'content') ?? ''
+      const bodyFromStore = kbBodyByDocId.get(legacyId, source.sourceId)
+      const rawBody = bodyFromStore ?? str(record, 'content') ?? ''
       const report = normalizeBodyReport(rawBody)
       const legacyProjectId = str(record, 'projectId')
-      const projectId = legacyProjectId === null ? '' : (projectIdByLegacy.get(legacyProjectId) ?? '')
+      const projectId = legacyProjectId === null ? '' : (projectIdByLegacy.get(legacyProjectId, source.sourceId) ?? '')
       const { unknownValues } = splitUnknown(record, ['id', 'title', 'content', 'body', 'projectId', 'createdAt', 'updatedAt', 'tags'])
-      documentIdByLegacy.set(legacyId, { projectId, kind: 'note' })
+      documentIds.set(legacyId, documentId, source.sourceId)
       rows.push({
         table: 'document',
         id: documentId,
@@ -1381,7 +1403,7 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
         charCount: countChars(report.text),
         origin: ref,
       })
-      if (kbBodyByDocId.has(legacyId)) {
+      if (bodyFromStore !== undefined) {
         // 正文缺失 = 不可再生内容丢失，必须点名。
       } else {
         warn(locationOf(ref), 'unsupported-shape', '知识库文档在 bodies 里没有对应正文，正文按空写入（原文档确实可能无正文，此处仅登记）。')
@@ -1516,7 +1538,7 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
     const fromId = entity.entityId
     for (const [field, value] of Object.entries(entity.values)) {
       if (typeof value !== 'string' || value === '') continue
-      const target = documentIdForLegacy(value) ?? settingsEntityIdByLegacy.get(value) ?? projectIdByLegacy.get(value) ?? null
+      const target = documentIdForLegacy(value, entity.ref.sourceId) ?? settingsEntityIdByLegacy.get(value, entity.ref.sourceId) ?? projectIdByLegacy.get(value, entity.ref.sourceId) ?? null
       if (target === null || target === fromId) continue
       const relationRef: LegacyOriginRef = { ...entity.ref, qualifier: `ref:${field}` }
       rows.push({
@@ -1574,12 +1596,22 @@ export function buildImportPlan(collection: LegacyCollection, options: BuildPlan
   // ---- 收尾：孤儿挂载 + 回收站标记（post-pass，只改自己规划出来的行） ----
   const finalRows: PlannedRow[] = rows.map((row) => {
     let next: PlannedRow = row
+    const redact = (field: string): void => {
+      warn(locationOf(row.origin), 'redacted-sensitive', `结构化字段「${field}」含凭据，已脱敏；请在新版安全存储中重新配置。`)
+    }
+    if (next.table === 'config_value' || next.table === 'plugin_data') {
+      const sensitiveKey = isSensitiveField(next.key) || SENSITIVE_META_KEYS.has(next.key)
+      if (sensitiveKey) redact(next.key)
+      next = { ...next, value: sensitiveKey ? '[redacted]' : jsonSafe(next.value, new Set(), redact) }
+    } else if (next.table === 'settings_entity' || next.table === 'relation') {
+      next = { ...next, values: jsonSafe(next.values, new Set(), redact) as Readonly<Record<string, unknown>> }
+    }
     if (
       fallbackProjectId !== null &&
-      (row.table === 'document' || row.table === 'settings_entity' || row.table === 'relation') &&
-      row.projectId === ''
+      (next.table === 'document' || next.table === 'settings_entity' || next.table === 'relation') &&
+      next.projectId === ''
     ) {
-      next = { ...row, projectId: fallbackProjectId }
+      next = { ...next, projectId: fallbackProjectId }
     }
     if (fallbackProjectId !== null && next.table === 'config_value' && next.scope === 'project' && next.ownerId === '') {
       next = { ...next, ownerId: fallbackProjectId }

@@ -203,9 +203,9 @@ export function listLocalDrafts(db: SqliteDatabase, sessionId?: string): LocalDr
 }
 
 /**
- * 列出**可恢复**的草稿（正文非空），用于启动/切章时的恢复提示。
+ * 列出**未确认**的草稿，用于启动/切章时的恢复提示。空正文也可能是待恢复的清空操作。
  *
- * 已确认的行 body 已被清空，天然不会出现在这里——这正是"确认后只清 body 不删行"的收益：
+ * 已确认的行按 confirmed_revision 排除——这正是"确认后只清 body 不删行"的收益：
  * 水位线还在，但恢复列表不会把已经保存过的内容再摆给用户。
  */
 export function listRecoverableDrafts(db: SqliteDatabase, sessionId?: string): LocalDraft[] {
@@ -213,12 +213,12 @@ export function listRecoverableDrafts(db: SqliteDatabase, sessionId?: string): L
     sessionId === undefined
       ? db
           .prepare(
-            `SELECT ${LOCAL_DRAFT_COLUMNS} FROM local_drafts WHERE body <> '' ORDER BY updated_at DESC`,
+            `SELECT ${LOCAL_DRAFT_COLUMNS} FROM local_drafts WHERE confirmed_revision IS NULL OR confirmed_revision = '' ORDER BY updated_at DESC`,
           )
           .all()
       : db
           .prepare(
-            `SELECT ${LOCAL_DRAFT_COLUMNS} FROM local_drafts WHERE session_id = ? AND body <> '' ORDER BY updated_at DESC`,
+            `SELECT ${LOCAL_DRAFT_COLUMNS} FROM local_drafts WHERE session_id = ? AND (confirmed_revision IS NULL OR confirmed_revision = '') ORDER BY updated_at DESC`,
           )
           .all(sessionId)
   ) as LocalDraftRow[]

@@ -396,6 +396,41 @@ describe('POST batches —— 原子写入', () => {
 })
 
 describe('POST batches —— 幂等', () => {
+  it('回放历史 opId 不能把基线倒退并覆盖服务器上的后续编辑', async () => {
+    const ctx = await setup()
+    const first = docOp('doc_replay_baseline', { newRevision: rev(1), payload: { title: '第一版' } })
+    const second = docOp(first.entityId, { baseRevision: rev(1), newRevision: rev(2), payload: { title: '后续编辑' } })
+    expect((await postBatch(ctx, makeBatchBody(ctx.workspaceId, ctx.deviceId, [first]))).statusCode).toBe(200)
+    expect((await postBatch(ctx, makeBatchBody(ctx.workspaceId, ctx.deviceId, [second]))).statusCode).toBe(200)
+
+    const stale = docOp(first.entityId, { baseRevision: rev(1), newRevision: rev(3), payload: { title: '过期覆盖' } })
+    const response = await postBatch(ctx, makeBatchBody(ctx.workspaceId, ctx.deviceId, [first, stale]))
+    expect(response.statusCode).toBe(409)
+    expect(response.json<BatchFailureBody>().code).toBe('SYNC_BATCH_REJECTED')
+    expect(countRows(ctx.harness.db, 'change_feed')).toBe(2)
+    expect(countRows(ctx.harness.db, 'sync_receipts')).toBe(2)
+    const state = ctx.harness.db.prepare('SELECT revision, payload_json FROM sync_entities WHERE entity_id = ?').get(first.entityId)
+    expect(state).toMatchObject({ revision: rev(2), payload_json: JSON.stringify(second.payload) })
+  })
+
+  it.each([
+    { entityId: 'doc_other' },
+    { entityType: 'project' },
+    { projectId: 'prj_other' },
+    { baseRevision: 'rev_other' },
+  ])('同 opId 改变操作身份或基线必须拒绝：%j', async (changed) => {
+    const ctx = await setup()
+    const original = docOp('doc_identity', { payload: { title: '相同正文' } })
+    expect((await postBatch(ctx, makeBatchBody(ctx.workspaceId, ctx.deviceId, [original]))).statusCode).toBe(200)
+
+    const response = await postBatch(ctx, makeBatchBody(ctx.workspaceId, ctx.deviceId, [{ ...original, ...changed }]))
+    expect(response.statusCode).toBe(409)
+    expect(response.json<{ code: string }>().code).toBe('IDEMPOTENCY_KEY_REUSED')
+    expect(countRows(ctx.harness.db, 'change_feed')).toBe(1)
+    expect(countRows(ctx.harness.db, 'sync_receipts')).toBe(1)
+    expect(countRows(ctx.harness.db, 'sync_entities')).toBe(1)
+  })
+
   it('同 batchId 同载荷重试返回原回执，且实体/版本/变更行数不变', async () => {
     const ctx = await setup()
     const first = docOp('doc_idem')

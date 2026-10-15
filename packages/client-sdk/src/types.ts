@@ -37,7 +37,7 @@ export interface CreateClientOptions {
   /**
    * 单次调用超时（毫秒），默认 15000（ADR 0006 D2 第 3 条）。
    *
-   * 非法值（非数字 / NaN / Infinity / <= 0）一律回落到默认值：把 0 解释成
+   * 非法值（非数字 / NaN / Infinity / <= 0 / 超过 2147483647）一律回落到默认值：把 0 解释成
    * 「立即超时」会让所有调用莫名失败，静默回落比静默失败安全。
    */
   readonly timeoutMs?: number

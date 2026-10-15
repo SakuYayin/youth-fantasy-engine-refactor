@@ -33,7 +33,7 @@
 
 import {
   ContractError,
-  encodeRevision,
+  newRevision,
   errOf,
   isWellFormedId,
   newIds,
@@ -73,7 +73,7 @@ import {
  *
  * 形状由 Lead 定为 `{ next(seq) }`：序号是输入，字符串是输出，
  * 这样"序号从哪里来"（实体行的 `revision_seq`）与"字符串怎么编码"解耦。
- * 默认实现就是 `@yfe/contracts` 的 {@link encodeRevision}（`r` + base36 补零）。
+ * 默认实现用 `@yfe/contracts` 的 {@link newRevision}，避免离线副本的同序号碰撞。
  */
 export interface RevisionGenerator {
   next(seq: number): Revision
@@ -105,7 +105,7 @@ export interface SaveDraftDeps {
   readonly revisionGenerator: RevisionGenerator
 }
 
-/** 基于 `@yfe/contracts` 的默认实现：时钟用 `systemClock`，revision 用 `encodeRevision`。 */
+/** 基于 `@yfe/contracts` 的默认实现：时钟用 `systemClock`，revision 用 `newRevision`。 */
 export const defaultSaveDraftDeps: SaveDraftDeps = {
   clock: systemClock,
   ids: {
@@ -113,7 +113,7 @@ export const defaultSaveDraftDeps: SaveDraftDeps = {
     operation: () => newIds.request(),
     batch: () => newIds.request(),
   },
-  revisionGenerator: { next: encodeRevision },
+  revisionGenerator: { next: newRevision },
 }
 
 // ---------------------------------------------------------------------------
@@ -217,7 +217,7 @@ export function saveDraft(
   //    契约要求"每次重算不读缓存"，所以重放路径同样重算，而不是回查历史。
   const charCount = countChars(body)
 
-  const run = db.transaction((): Result<CommittedSave> => {
+  const save = (): Result<CommittedSave> => {
     // ---- 1. 主体与 ProjectContext 校验 ---------------------------------
     const row = db
       .prepare(
@@ -249,23 +249,37 @@ export function saveDraft(
       })
     }
 
-    // ---- 2. 比较 expectedRevision（水位线之前的一道快闸） ---------------
-    if (context.expectedRevision !== null && context.expectedRevision !== row.revision) {
-      return errOf(
-        'REVISION_CONFLICT',
-        '文档已被其他改动推进，请基于最新版本重试',
-        requestId,
-        { expectedRevision: context.expectedRevision, currentRevision: row.revision },
-      )
-    }
-
-    // ---- 3. 草稿序号水位线 ---------------------------------------------
+    // ---- 2. 草稿序号水位线（重放先于版本检查：原请求仍携带旧版本） -------
     const stored = readLocalDraft(db, documentId, sessionId)
     const check = checkDraftSequence(draftSequence, stored, requestId)
     if (!check.ok) return check // 更小序号：迟到保存，直接拒绝
     const verdict: DraftSequenceCheck = check.value
 
     if (verdict.state === 'confirmed-replay') {
+      // 序号标识同一份稿子，不允许换正文后误报已保存。历史被裁剪时仍可用
+      // 当前实体或待同步 operation 还原原稿；无法还原则拒绝猜测。
+      const revision = db.prepare(
+        `SELECT body_snapshot AS body FROM revisions
+          WHERE entity_type = ? AND entity_id = ? AND revision = ?`,
+      ).get(DOCUMENT_ENTITY_TYPE, documentId, verdict.confirmedRevision) as { body: string | null } | undefined
+      let confirmedBody = revision?.body
+      if (typeof confirmedBody !== 'string' && row.revision === verdict.confirmedRevision) {
+        confirmedBody = (db.prepare('SELECT body FROM documents WHERE id = ?').get(documentId) as { body: string }).body
+      }
+      if (typeof confirmedBody !== 'string') {
+        const operation = db.prepare(
+          `SELECT json_extract(payload_json, '$.body') AS body FROM operations
+            WHERE entity_type = ? AND entity_id = ? AND new_revision = ?`,
+        ).get(DOCUMENT_ENTITY_TYPE, documentId, verdict.confirmedRevision) as { body: unknown } | undefined
+        if (typeof operation?.body === 'string') confirmedBody = operation.body
+      }
+      if (typeof confirmedBody !== 'string') {
+        return errOf('STORAGE_CORRUPT', '已确认草稿缺少可核对的原始正文，无法安全重放', requestId)
+      }
+      if (confirmedBody !== body) {
+        return errOf('IDEMPOTENCY_KEY_REUSED', '同一草稿序号不能用于不同正文，请推进草稿序号后重试', requestId,
+          { field: 'draftSequence', draftSequence })
+      }
       // 幂等重放：**不写任何行**（否则同一次编辑会产生第二条 operation）。
       // savedAt 取确认时写入的时间戳，保证同序号重放返回字节一致的结果。
       return ok({
@@ -273,6 +287,12 @@ export function saveDraft(
         draftSequence: verdict.storedSequence,
         savedAt: verdict.savedAt,
       })
+    }
+
+    // ---- 3. 新写入才比较 expectedRevision ------------------------------
+    if (context.expectedRevision !== null && context.expectedRevision !== row.revision) {
+      return errOf('REVISION_CONFLICT', '文档已被其他改动推进，请基于最新版本重试', requestId,
+        { expectedRevision: context.expectedRevision, currentRevision: row.revision })
     }
 
     // ---- 4. 写正文与新 revision（乐观锁 CAS） ---------------------------
@@ -394,6 +414,11 @@ export function saveDraft(
 
     // 注意：这里返回的**不是** SaveDraftOutput，成功结果在提交之后组装。
     return ok({ revision: newRevision, draftSequence, savedAt })
+  }
+  const run = db.transaction(() => {
+    const result = save()
+    if (!result.ok) throw new ContractError(result.error)
+    return result
   })
 
   let committed: Result<CommittedSave>

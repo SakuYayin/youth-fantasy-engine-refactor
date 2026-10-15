@@ -23,7 +23,7 @@
  *    所以「绕过 repository」不等于「绕过契约」。
  */
 
-import { errOf, encodeRevision, ok, type Err, type RequestId, type Result } from '@yfe/contracts'
+import { ContractError, err, errOf, encodeRevision, ok, type Err, type RequestId, type Result } from '@yfe/contracts'
 import type { SqliteDatabase } from '@yfe/persistence-sqlite'
 import { assertSchemaAcceptsWrites, LATEST_SCHEMA_VERSION, readSchemaVersion } from '@yfe/persistence-sqlite'
 
@@ -486,6 +486,20 @@ export function writeImportPlan(
           continue
         }
 
+        // 允许合库不等于允许抢占另一工作区/作品的主键。旧 ID 会被原样保留，
+        // 必须在 UPDATE 之前检查归属，预演也执行相同检查。
+        for (const column of ['workspace_id', 'project_id'] as const) {
+          const index = spec.columns.indexOf(column)
+          if (index >= 0 && normalise(existing[column]) !== normalise(values[index] ?? null)) {
+            throw new ContractError({
+              code: 'ALREADY_EXISTS',
+              message: '导入主键已被其他工作区或作品占用，拒绝覆盖现有数据。',
+              requestId,
+              detail: { table: spec.table, reason: 'import-owner-conflict', rolledBack: !dryRun },
+            })
+          }
+        }
+
         const same = spec.columns.every((column, index) => normalise(existing[column]) === normalise(values[index] ?? null))
         if (same) {
           bump(spec.key, (draft) => ({ ...draft, skipped: draft.skipped + 1, unchanged: draft.unchanged + 1 }))
@@ -577,6 +591,7 @@ export function counterKeyForRefusal(location: string): ImportCounterKey {
 }
 
 function mapWriteThrown(thrown: unknown, requestId: RequestId): Err {
+  if (thrown instanceof ContractError) return err(thrown.toPayload())
   const message = thrown instanceof Error ? `${thrown.name}: ${thrown.message}` : String(thrown)
   const code = /FOREIGN KEY|constraint failed/i.test(message) ? 'VALIDATION_FAILED' : 'STORAGE_UNAVAILABLE'
   return errOf(code, `导入事务失败并已整体回滚：${message}`, requestId, {

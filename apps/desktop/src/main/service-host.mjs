@@ -125,6 +125,7 @@ export function createServiceHost(options) {
   let seq = 0;
   /** @type {'idle' | 'starting' | 'ready' | 'restarting' | 'stopped' | 'failed'} */
   let state = 'idle';
+  let openedPath = null;
   /** @type {Array<{level: string, message: string, at: string}>} */
   const diagnostics = [];
   const counters = { requests: 0, responses: 0, timeouts: 0, orphanResponses: 0, workerExits: 0, sendFailures: 0 };
@@ -166,9 +167,25 @@ export function createServiceHost(options) {
     if (!msg || typeof msg !== 'object') return;
 
     if (msg.kind === 'ready') {
-      state = 'ready';
       record('info', 'worker 就绪');
-      settleReady(null);
+      if (openedPath === null) {
+        state = 'ready';
+        settleReady(null);
+      } else {
+        // 重启后的进程没有数据库连接；恢复原库成功后才放行排队请求。
+        state = 'starting';
+        const initializingChild = child;
+        void sendRequest('open', { path: openedPath }).then((result) => {
+          if (child !== initializingChild || closed) return;
+          if (result.ok) {
+            state = 'ready';
+            settleReady(null);
+          } else {
+            state = 'failed';
+            settleReady(new Error('重启后无法重新打开数据库'));
+          }
+        });
+      }
       return;
     }
 
@@ -236,6 +253,8 @@ export function createServiceHost(options) {
       record('error', `worker 启动失败：${error.message}`);
       rejectAllPending(HOST_ERROR_CODES.unavailable, '服务进程无法启动');
       state = 'failed';
+      if (child === spawned) child = null;
+      settleReady(error);
     });
     spawned.on('exit', handleExit);
     spawned.stdout?.on('data', (chunk) => record('debug', String(chunk).trimEnd()));
@@ -302,6 +321,15 @@ export function createServiceHost(options) {
       };
     }
 
+    if (closed) {
+      return { ok: false, error: failure(HOST_ERROR_CODES.shuttingDown, '服务正在关闭', requestId) };
+    }
+    const result = await sendRequest(method, payload, callOptions, requestId);
+    if (method === 'open' && result.ok && typeof payload?.path === 'string') openedPath = payload.path;
+    return result;
+  }
+
+  function sendRequest(method, payload, callOptions, requestId = `req_${++seq}`) {
     const target = child;
     if (!target) {
       return { ok: false, error: failure(HOST_ERROR_CODES.unavailable, '服务进程已退出', requestId) };
@@ -322,8 +350,14 @@ export function createServiceHost(options) {
       pending.set(requestId, { resolve, timer, method });
 
       try {
-        const sent = target.send({ kind: 'request', requestId, method, payload });
-        if (sent === false) throw new Error('IPC 通道已关闭');
+        // send(false) 只是背压，消息仍已排队；只在回调报错时判定发送失败。
+        target.send({ kind: 'request', requestId, method, payload }, (error) => {
+          if (!error || !pending.has(requestId)) return;
+          counters.sendFailures += 1;
+          pending.delete(requestId);
+          clearTimeout(timer);
+          resolve({ ok: false, error: failure(HOST_ERROR_CODES.restarted, '发送请求失败', requestId) });
+        });
       } catch (error) {
         counters.sendFailures += 1;
         pending.delete(requestId);
@@ -348,6 +382,7 @@ export function createServiceHost(options) {
   async function shutdown(stopOptions) {
     if (closed) return;
     closed = true;
+    settleReady(new Error('监督器已关闭'));
     const timeoutMs = stopOptions?.timeoutMs ?? 5_000;
 
     const deadline = Date.now() + timeoutMs;

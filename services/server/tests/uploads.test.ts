@@ -14,7 +14,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readFileSync, unlinkSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
@@ -30,6 +30,7 @@ import { defaultServerConfig } from '../src/http/config.js'
 import type { ServerConfig } from '../src/http/config.js'
 import { createServer } from '../src/http/server.js'
 import { listFilesRecursive } from '../src/storage/localFs.js'
+import { createAssetStorage } from '../src/storage/index.js'
 import { isWithinRoot, resolveUnderRoot } from '../src/storage/paths.js'
 import { cleanupTempDirs, makeTempDir, seedOwner, testClock, bearer } from './helpers.js'
 import type { TestClock } from './helpers.js'
@@ -201,6 +202,44 @@ async function uploadParts(uploadId: string, bytes: Buffer = ORIGINAL): Promise<
     expect(res.body.inserted).toBe(true)
   }
 }
+
+describe('完成上传故障恢复', () => {
+  it('已记账分片在盘上缺失：返回存储错误，并允许补传后重新完成', async () => {
+    const created = await createUpload()
+    const uploadId = created.body.uploadId as string
+    await uploadParts(uploadId)
+    const storage = createAssetStorage(ctx.storageRoot)
+    unlinkSync(storage.partFile(ctx.workspaceId, uploadId, 1).absolutePath)
+
+    const failed = await completeUpload(uploadId)
+    expect(failed.statusCode).toBe(503)
+    expect(failed.body.code).toBe('STORAGE_CORRUPT')
+    expect(findUploadSession(ctx.db, uploadId)?.status).toBe('open')
+    expect(countRows(ctx.db, 'assets')).toBe(0)
+
+    expect((await putPart(uploadId, 1, partOf(ORIGINAL, 1))).statusCode).toBe(200)
+    expect((await completeUpload(uploadId)).statusCode).toBe(200)
+    expect(findUploadSession(ctx.db, uploadId)?.status).toBe('completed')
+    expect(countRows(ctx.db, 'assets')).toBe(1)
+  })
+
+  it('完成会话更新失败会回滚资产登记，重试后只创建一份资产', async () => {
+    const created = await createUpload()
+    const uploadId = created.body.uploadId as string
+    await uploadParts(uploadId)
+    ctx.db.exec(`CREATE TRIGGER reject_upload_complete BEFORE UPDATE OF status ON upload_sessions
+      WHEN NEW.status = 'completed' BEGIN SELECT RAISE(ABORT, 'injected completion failure'); END`)
+
+    expect((await completeUpload(uploadId)).statusCode).toBe(500)
+    expect(findUploadSession(ctx.db, uploadId)?.status).toBe('open')
+    expect(countRows(ctx.db, 'assets')).toBe(0)
+
+    ctx.db.exec('DROP TRIGGER reject_upload_complete')
+    expect((await completeUpload(uploadId)).statusCode).toBe(200)
+    expect(findUploadSession(ctx.db, uploadId)?.status).toBe('completed')
+    expect(countRows(ctx.db, 'assets')).toBe(1)
+  })
+})
 
 describe('创建上传会话', () => {
   it('返回 uploadId / part 大小 / 已收分片 / expiresAt，staging_dir 存相对键', async () => {

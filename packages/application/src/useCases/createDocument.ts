@@ -133,6 +133,8 @@ export async function createDocument(
           value: { documentId, revision: written.value.revision, orderKey: written.value.orderKey },
         }
       },
+      JSON.stringify([context.value.workspaceId, projectId.value, kind.value, parentId,
+        title.value, placement.value]),
     )
     return created
   })

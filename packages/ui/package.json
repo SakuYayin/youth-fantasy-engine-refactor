@@ -18,7 +18,7 @@
     "vue": "^3.5.44"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   }
 }

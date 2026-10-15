@@ -478,6 +478,10 @@ function planBaselines(
     const prior = findFeedEntryByOpId(db, workspaceId, op.opId)
     if (prior !== null) {
       if (
+        prior.entityType !== op.entityType ||
+        prior.entityId !== op.entityId ||
+        prior.projectId !== op.projectId ||
+        prior.baseRevision !== op.baseRevision ||
         prior.revision !== op.newRevision ||
         prior.action !== op.action ||
         digestOf(prior.payload) !== digestOf(op.payload)
@@ -490,7 +494,8 @@ function planBaselines(
         })
       }
       replays.set(op.opId, prior.revision)
-      overlay.set(key, { revision: prior.revision, deleted: prior.action === 'delete' })
+      // 已提交操作只是回执回放，不能把后续操作的基线倒退到历史 revision。
+      // 当前实体可能早已更新，后续新操作必须检查数据库或本批新写入的 overlay。
       continue
     }
 

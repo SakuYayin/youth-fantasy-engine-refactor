@@ -881,6 +881,73 @@ describe('🔴 降级拒写与能力拒绝', () => {
 })
 
 describe('destroy —— 关闭宿主', () => {
+  it('deactivate 永久挂起仍完成其它清理并隔离插件，destroy 能完成', async () => {
+    const h = host({ cleanupTimeoutMs: 10 })
+    let cleaned = false
+    h.register(defineCandidate(manifest(), {
+      activate: async (context) => { context.effects.add(() => { cleaned = true }) },
+      deactivate: () => new Promise<void>(() => {}),
+    }), REQUEST)
+    await h.load('yfe.alpha', REQUEST)
+    const report = await h.disable('yfe.alpha')
+    expect(report.ok && report.value.state).toBe('quarantined')
+    expect(cleaned).toBe(true)
+    expect(await h.destroy()).toEqual(['yfe.alpha'])
+  })
+
+  it('重复 disable 和 destroy 不得解除 quarantined 或允许重新激活', async () => {
+    const h = host({ cleanupTimeoutMs: 10 })
+    let activations = 0
+    h.register(defineCandidate(manifest(), {
+      activate: async (context) => {
+        activations += 1
+        context.tasks.start('stuck', () => new Promise<void>(() => {}))
+      },
+    }), REQUEST)
+    await h.load('yfe.alpha', REQUEST)
+    await h.disable('yfe.alpha')
+    expect(h.resources().pendingTasks).toBe(1)
+    const again = await h.disable('yfe.alpha')
+    expect(again.ok && again.value.state).toBe('quarantined')
+    expect((await h.enable('yfe.alpha')).ok).toBe(false)
+    expect(await h.destroy()).toEqual(['yfe.alpha'])
+    expect(h.statusOf('yfe.alpha')?.state).toBe('quarantined')
+    expect(activations).toBe(1)
+  })
+
+  it('激活失败的任务未排空时隔离，并关闭原上下文的任务闸门', async () => {
+    const h = host({ cleanupTimeoutMs: 10 })
+    let captured: PluginContext | undefined
+    h.register(defineCandidate(manifest(), {
+      activate: async (context) => {
+        captured = context
+        context.tasks.start('stuck', () => new Promise<void>(() => {}))
+        throw new Error('activation-failed')
+      },
+    }), REQUEST)
+    expect((await h.load('yfe.alpha')).ok).toBe(false)
+    expect(h.statusOf('yfe.alpha')?.state).toBe('quarantined')
+    expect(h.resources().pendingTasks).toBe(1)
+    const late = captured?.tasks.start('late', async () => {})
+    expect(late?.ok).toBe(false)
+    expect((await h.enable('yfe.alpha')).ok).toBe(false)
+    await h.destroy()
+  })
+
+  it('激活回滚的 effect 永久挂起时不能重试激活', async () => {
+    const h = host({ cleanupTimeoutMs: 10 })
+    h.register(defineCandidate(manifest(), {
+      activate: async (context) => {
+        context.effects.add(() => new Promise<void>(() => {}))
+        throw new Error('activation-failed')
+      },
+    }), REQUEST)
+    expect((await h.load('yfe.alpha')).ok).toBe(false)
+    expect(h.statusOf('yfe.alpha')?.state).toBe('quarantined')
+    expect((await h.enable('yfe.alpha')).ok).toBe(false)
+    await h.destroy()
+  })
+
   it('destroy 停用全部插件，返回 quarantined 列表为空', async () => {
     const h = host()
     h.register(defineCandidate(manifest({ id: 'yfe.beta' }), noopPlugin()), REQUEST)

@@ -12,6 +12,7 @@ export interface YfeBridge {
   readonly call: (method: string, payload: unknown) => Promise<unknown>
   readonly methods: readonly string[]
   readonly protocolVersion: number
+  readonly onBeforeClose: (handler: () => Promise<boolean>) => () => void
 }
 
 declare global {

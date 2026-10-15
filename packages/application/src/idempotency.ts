@@ -35,6 +35,30 @@ const WRITE_FAILED = '幂等记录写入失败，重复提交可能被再次执�
 /** 幂等记录损坏时的兜底文案。 */
 const CORRUPT = '幂等记录内容损坏，无法还原原始结果'
 
+/** 同进程共享端口的请求按键串行；跨进程原子性仍由持久化适配器保证。 */
+const queuesByPort = new WeakMap<IdempotencyPort, Map<IdempotencyKey, Promise<void>>>()
+
+async function serializeKey<T>(port: IdempotencyPort, key: IdempotencyKey, run: () => Promise<T>): Promise<T> {
+  let queues = queuesByPort.get(port)
+  if (queues === undefined) {
+    queues = new Map()
+    queuesByPort.set(port, queues)
+  }
+  const previous = queues.get(key)
+  let release!: () => void
+  const current = new Promise<void>((resolve) => { release = resolve })
+  queues.set(key, current)
+
+  // 队列节点只表示前一请求已结束，业务失败不会使后续请求永远等待或拒绝。
+  await previous
+  try {
+    return await run()
+  } finally {
+    release()
+    if (queues.get(key) === current) queues.delete(key)
+  }
+}
+
 function parseRecordValue(value: string): unknown {
   try {
     const parsed: unknown = JSON.parse(value)
@@ -57,40 +81,47 @@ export async function withIdempotency<T>(
   key: IdempotencyKey | undefined,
   requestId: RequestId,
   compute: () => Promise<Result<T>>,
+  requestIdentity?: string,
 ): Promise<Result<T>> {
   if (port === undefined || key === undefined) return compute()
 
-  let existing: IdempotencyRecord | null
-  try {
-    existing = await port.find(key)
-  } catch (thrown) {
-    return fail(thrown, requestId, READ_FAILED)
-  }
-
-  if (existing !== null) {
-    if (existing.scope !== scope) {
-      const reused: Err = errOf(
-        'IDEMPOTENCY_KEY_REUSED',
-        '同一幂等键已用于另一个请求，请更换幂等键后重试',
-        requestId,
-        { scope, existingScope: existing.scope },
-      )
-      return errFrom(reused.error, requestId)
+  return serializeKey<Result<T>>(port, key, async () => {
+    let existing: IdempotencyRecord | null
+    try {
+      existing = await port.find(key)
+    } catch (thrown) {
+      return fail(thrown, requestId, READ_FAILED)
     }
-    const parsed = parseRecordValue(existing.value)
-    if (parsed === undefined) return fail(new TypeError(CORRUPT), requestId, CORRUPT)
-    return { ok: true, value: parsed as T }
-  }
 
-  const result = await compute()
-  if (!result.ok) return result
+    if (existing !== null) {
+      if (existing.scope !== scope) {
+        const reused: Err = errOf(
+          'IDEMPOTENCY_KEY_REUSED',
+          '同一幂等键已用于另一个请求，请更换幂等键后重试',
+          requestId,
+          { scope, existingScope: existing.scope },
+        )
+        return errFrom(reused.error, requestId)
+      }
+      const parsed = parseRecordValue(existing.value)
+      if (parsed === undefined) return fail(new TypeError(CORRUPT), requestId, CORRUPT)
+      if (requestIdentity !== undefined && existing.requestIdentity !== requestIdentity) {
+        return errOf('IDEMPOTENCY_KEY_REUSED', '同一幂等键已用于不同请求', requestId)
+      }
+      return { ok: true, value: parsed as T }
+    }
 
-  try {
-    await port.save({ key, scope, value: JSON.stringify(result.value) })
-  } catch (thrown) {
-    return fail(thrown, requestId, WRITE_FAILED)
-  }
-  return result
+    const result = await compute()
+    if (!result.ok) return result
+
+    try {
+      await port.save({ key, scope, value: JSON.stringify(result.value),
+        ...(requestIdentity === undefined ? {} : { requestIdentity }) })
+    } catch (thrown) {
+      return fail(thrown, requestId, WRITE_FAILED)
+    }
+    return result
+  })
 }
 
 /**

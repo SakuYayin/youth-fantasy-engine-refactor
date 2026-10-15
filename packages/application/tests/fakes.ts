@@ -253,10 +253,12 @@ export function createFakeHarness(options: FakeOptions = {}): FakeHarness {
           )
         }
         // 事务内重新校验（TOCTOU）：归属快照过期 → 冲突
-        if (document.revision !== request.ownership.revision) {
+        const expected = request.input.context.expectedRevision
+        if (document.revision !== request.ownership.revision ||
+            (expected !== null && expected !== document.revision)) {
           return Promise.resolve(
             errOf('REVISION_CONFLICT', '文档已被其他改动推进，请基于最新版本重试', request.input.context.requestId, {
-              currentRevision: document.revision,
+              currentRevision: document.revision, expectedRevision: expected,
             }),
           )
         }

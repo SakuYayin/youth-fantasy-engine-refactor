@@ -32,6 +32,7 @@ import {
 import type { Dirent, ReadStream } from 'node:fs'
 import { dirname, join, relative, sep } from 'node:path'
 import type { Writable } from 'node:stream'
+import { finished } from 'node:stream/promises'
 
 /** 存储失败的粗分类，路由层据此选错误码。 */
 export type StorageFailureKind = 'not_found' | 'disk_full' | 'read_only' | 'unavailable'
@@ -283,6 +284,9 @@ export async function concatFilesToFile(
 ): Promise<number> {
   ensureDir(dirname(target))
   const out = createWriteStream(target, { flags: 'w' })
+  // 从创建起监听 error；write 回调拒绝并不会消费流的 error 事件。
+  const completion = finished(out, { cleanup: true })
+  void completion.catch(() => {})
   let total = 0
   try {
     for (const source of sources) {
@@ -293,7 +297,8 @@ export async function concatFilesToFile(
         await writeChunk(out, buffer)
       }
     }
-    await finishStream(out)
+    out.end()
+    await completion
   } catch (error) {
     out.destroy()
     throw wrap(error, '无法拼接暂存分片。')
@@ -310,13 +315,5 @@ function writeChunk(out: Writable, chunk: Buffer): Promise<void> {
       }
       reject(error)
     })
-  })
-}
-
-function finishStream(out: Writable): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    out.once('finish', () => resolve())
-    out.once('error', (error) => reject(error))
-    out.end()
   })
 }

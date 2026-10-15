@@ -66,6 +66,9 @@ const state = createAppState({
 const app = createApp(App, { state })
 app.mount('#app')
 
+// main 等待明确的保存结果，超时/失败由宿主提示继续编辑或放弃退出。
+window.yfe?.onBeforeClose(() => state.flush())
+
 /**
  * 卸载/关闭时**先冲刷**而不是 `dispose()`：dispose 会作废在途保存，
  * 那样防抖窗口里刚敲的字就真的没了。

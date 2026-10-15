@@ -222,11 +222,13 @@ function backupFileName(dbPath: string, fromVersion: number, stamp: string): str
   return `${base}.v${fromVersion}.${safeStamp}.db`
 }
 
-function pruneBackups(dir: string, keep: number, log: (m: string) => void): void {
+function pruneBackups(dir: string, keep: number, dbPath: string, log: (m: string) => void): void {
   if (keep <= 0) return
   let entries: Array<{ name: string; mtimeMs: number }>
   try {
-    entries = readDirWithStats(dir)
+    const base = basename(dbPath).replace(/\.(db|sqlite3?|sqlite)$/i, '')
+    entries = readDirWithStats(dir).filter((entry) => entry.name.startsWith(`${base}.v`)
+      && /^\d+\.\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.db(?:\.\d+\.db)?$/.test(entry.name.slice(base.length + 2)))
   } catch {
     return
   }
@@ -299,6 +301,9 @@ export function createConsistentBackup(
     // 后缀保留 `.db`：清理逻辑只认 `.db`，否则撞车产生的副本会永远留在用户磁盘上。
     target = join(dir, `${base}.${attempt}.db`)
   }
+  if (existsSync(target)) {
+    throw new ContractError({ code: 'ALREADY_EXISTS', message: '迁移备份文件名冲突过多，请更换备份目录后重试。', requestId: newIds.request() })
+  }
 
   // `VACUUM INTO` 是同步参数绑定；失败时不能留下半截文件。
   try {
@@ -311,7 +316,7 @@ export function createConsistentBackup(
   const byteSize = safeSize(target)
   log(`迁移前备份已创建：${basename(target)}（${byteSize} 字节，版本 ${fromVersion}）`)
 
-  if (options.keep !== undefined) pruneBackups(dir, options.keep, log)
+  if (options.keep !== undefined) pruneBackups(dir, options.keep, dbPath, log)
 
   return { path: target, byteSize, fromVersion }
 }

@@ -252,15 +252,17 @@ export function registerAssetRoutes(app: FastifyInstance, deps: AssetRouteDeps):
         .header('content-type', asset.mimeType ?? 'application/octet-stream')
         .header('content-length', byteSize)
 
-      if (asset.originalName !== null && asset.originalName.length > 0) {
+      {
+        // 无文件名的 HTML/SVG 也必须下载，避免用户上传的脚本在应用源下执行。
+        const originalName = asset.originalName || `${asset.assetId}.bin`
         // 头里只能放 ASCII：给一个降级的 filename，再用 RFC 5987 的
         // filename* 携带原文，避免非 ASCII 文件名把头写坏（Node 会抛
         // ERR_INVALID_CHAR，那会变成 500 而不是"下载了个名字怪的文件"）。
-        const asciiName = asset.originalName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_')
+        const asciiName = originalName.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_')
         reply.header(
           'content-disposition',
           `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(
-            asset.originalName,
+            originalName,
           )}`,
         )
       }

@@ -103,6 +103,57 @@ afterEach(() => {
 });
 
 describe('草稿会话状态机', () => {
+  it('等待新序号冲刷时旧请求失败，flush 也会结束且保留新正文', async () => {
+    const h = createHarness({ debounceMs: 5 })
+    h.type('第一稿')
+    await vi.advanceTimersByTimeAsync(5)
+    h.type('还未保存的新稿')
+    const flushed = h.session.flush()
+    await h.settle(0, { ok: false, code: 'STORAGE_DISK_FULL' })
+    await expect(flushed).resolves.toMatchObject({ ok: false })
+    expect(h.session.getSnapshot().body).toBe('还未保存的新稿')
+    expect(h.session.getSnapshot().status).toBe('error')
+  })
+
+  it('新序号等待期间改回旧正文，旧请求成功后仍保存回改结果', async () => {
+    const h = createHarness({ body: '原稿', debounceMs: 5 })
+    h.type('中间稿')
+    await vi.advanceTimersByTimeAsync(5)
+    h.type('原稿')
+    const flushed = h.session.flush()
+    await h.settle(0, { ok: true, revision: 'rev-1' })
+    await h.settle(1, { ok: true, revision: 'rev-2' })
+    await expect(flushed).resolves.toMatchObject({ ok: true, revision: 'rev-2' })
+    expect(h.session.getSnapshot().status).toBe('saved')
+  })
+
+  it('keep-local 在旧请求未返回时重挂新基线，旧回执不能覆盖新版本', async () => {
+    const h = createHarness({ debounceMs: 5 })
+    h.type('本地稿')
+    await vi.advanceTimersByTimeAsync(5)
+    h.session.applyExternalUpdate({ revision: 'rev-external', body: '外部稿' })
+    h.session.resolveConflict('keep-local')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(h.requests[1]?.expectedRevision).toBe('rev-external')
+    expect(h.requests[1]?.draftSequence).toBeGreaterThan(h.requests[0]!.draftSequence)
+    await h.settle(0, { ok: true, revision: 'rev-obsolete' })
+    expect(h.session.getSnapshot().revision).toBe('rev-external')
+    await h.settle(1, { ok: true, revision: 'rev-final' })
+    expect(h.session.getSnapshot().revision).toBe('rev-final')
+  })
+
+  it('错误的更小回带序号和缺 revision 成功载荷都不能卡死或假报保存', async () => {
+    for (const raw of [{ ok: true, draftSequence: 0, revision: 'x' }, { ok: true, draftSequence: 1 }]) {
+      const h = createHarness({ debounceMs: 5 })
+      h.type('重要正文')
+      await vi.advanceTimersByTimeAsync(5)
+      await h.resolveRaw(0, raw)
+      expect(h.session.getSnapshot().status).toBe('error')
+      expect(h.session.getSnapshot().hasUnsavedChanges).toBe(true)
+      expect(h.session.getSnapshot().inFlightSequence).toBeNull()
+    }
+  })
+
   it('初始状态为已保存且无未保存改动', () => {
     const h = createHarness({ body: '第一章', revision: 'rev-0' });
     const s = h.session.getSnapshot();

@@ -29,6 +29,8 @@ COPY packages/persistence-sqlite/package.json ./packages/persistence-sqlite/
 COPY packages/plugin-sdk/package.json ./packages/plugin-sdk/
 COPY packages/plugin-host/package.json ./packages/plugin-host/
 COPY packages/application/package.json ./packages/application/
+COPY packages/client-sdk/package.json ./packages/client-sdk/
+COPY packages/ui/package.json ./packages/ui/
 COPY packages/legacy-import/package.json ./packages/legacy-import/
 COPY apps/desktop/package.json ./apps/desktop/
 COPY services/server/package.json ./services/server/

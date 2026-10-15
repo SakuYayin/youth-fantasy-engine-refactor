@@ -27,6 +27,7 @@ let adapter: CodeMirrorAdapter | null = null
 let stopState: (() => void) | null = null
 let stopEditor: (() => void) | null = null
 let appliedDocumentId: string | null = null
+let appliedReadOnly = true
 
 const conflictOpen = computed(() => snapshot.value.conflict !== null)
 
@@ -34,17 +35,25 @@ const conflictOpen = computed(() => snapshot.value.conflict !== null)
 function applySnapshotToEditor(): void {
   if (adapter === null) return
   const current = snapshot.value
+  const readOnly = current.readOnly || current.loading
   if (current.selectedDocumentId === null) {
+    adapter.open({ documentId: '', body: '', readOnly: true })
     appliedDocumentId = null
+    appliedReadOnly = true
     return
   }
-  if (current.selectedDocumentId === appliedDocumentId) return
+  if (current.selectedDocumentId === appliedDocumentId && adapter.getBody() === current.body) {
+    if (appliedReadOnly !== readOnly) adapter.setReadOnly(readOnly)
+    appliedReadOnly = readOnly
+    return
+  }
   adapter.open({
     documentId: current.selectedDocumentId,
     body: current.body,
-    readOnly: current.readOnly,
+    readOnly,
   })
   appliedDocumentId = current.selectedDocumentId
+  appliedReadOnly = readOnly
 }
 
 onMounted(async () => {
@@ -66,6 +75,7 @@ onMounted(async () => {
     stopEditor = adapter.onChange((body) => {
       props.state.edit(body)
     })
+    props.state.setNavigationGuard(() => adapter?.isComposing !== true)
   }
 
   await props.state.start()
@@ -73,6 +83,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  props.state.setNavigationGuard(null)
   stopEditor?.()
   stopState?.()
   adapter?.dispose()
@@ -138,11 +149,11 @@ function onTakeExternal(): void {
           </template>
           <template v-else>
             <YfeToolbar>
-              <YfeButton label="新建章节" variant="ghost" @click="onCreateChapter" />
+              <YfeButton label="新建章节" variant="ghost" :disabled="snapshot.loading || snapshot.readOnly" @click="onCreateChapter" />
             </YfeToolbar>
             <YfeTree
               :nodes="snapshot.tree"
-              :selected-id="snapshot.selectedDocumentId ?? undefined"
+              :selected-id="snapshot.selectedDocumentId"
               :expanded-ids="snapshot.expandedIds"
               @select="onSelect"
               @toggle="onToggle"

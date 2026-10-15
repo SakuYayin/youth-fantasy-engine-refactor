@@ -12,7 +12,12 @@
  *   preload 使用 ESM。见 docs/adr/0003-preload-sandbox-cjs.md。
  */
 const { contextBridge, ipcRenderer } = require('electron');
-const { IPC_METHODS } = require('./ipc-methods.cjs');
+// 沙箱化 preload 的 require 不能加载本地文件；运行时必须自包含。
+// 与 TS/CJS 权威副本的一致性由受限 require 环境下的执行测试保证。
+const IPC_METHODS = Object.freeze([
+  'saveDraft', 'listDocumentTree', 'getDocument',
+  'createProject', 'createDocument', 'systemStatus',
+]);
 
 const IPC_CHANNEL = 'yfe:invoke';
 
@@ -58,4 +63,16 @@ contextBridge.exposeInMainWorld('yfe', Object.freeze({
   call: invoke,
   methods: IPC_METHODS,
   protocolVersion: 1,
+  onBeforeClose(handler) {
+    if (typeof handler !== 'function') return () => {};
+    const listener = (_event, token) => {
+      if (typeof token !== 'string') return;
+      void Promise.resolve().then(() => handler()).then(
+        (saved) => ipcRenderer.send('yfe:close-result', { token, saved: saved === true }),
+        () => ipcRenderer.send('yfe:close-result', { token, saved: false }),
+      );
+    };
+    ipcRenderer.on('yfe:before-close', listener);
+    return () => ipcRenderer.removeListener('yfe:before-close', listener);
+  },
 }));

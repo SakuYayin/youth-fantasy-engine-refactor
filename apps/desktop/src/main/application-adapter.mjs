@@ -49,6 +49,7 @@
  *    避免归属查询在仓内存在两份定义——包外这一份就在本文件，只有这一处。
  */
 
+import { createHash } from 'node:crypto';
 import { APP_VERSION, cryptoRandomSource, errOf, ok, toErrorPayload } from '@yfe/contracts';
 import { saveDraft as saveDraftTransaction } from '@yfe/persistence-sqlite';
 import {
@@ -142,7 +143,34 @@ function clockAt(occurredAt) {
  * @returns {any} ApplicationPorts
  */
 export function createSqliteApplicationPorts({ db, ids, revisions, describeDatabase }) {
+  const receiptId = (key) => `receipt_${createHash('sha256').update(key).digest('hex')}`;
   return {
+    // 本地命令回执复用 operations 的已开放实体类型空间；不创建 outbox，绝不同步。
+    // db-worker 将整条用例与回执放入同一事务，并串行执行，崩溃后不会重复创建实体。
+    idempotency: {
+      async find(key) {
+        const row = db.prepare(
+          "SELECT payload_json FROM operations WHERE op_id = ? AND entity_type = 'application-receipt'",
+        ).get(receiptId(key));
+        if (!row) return null;
+        const record = JSON.parse(row.payload_json);
+        if (record?.key !== key || typeof record.scope !== 'string' || typeof record.value !== 'string') {
+          throw new Error('本地命令回执损坏');
+        }
+        return record;
+      },
+      async save(record) {
+        const identity = JSON.parse(record.requestIdentity ?? '[]');
+        const workspaceId = identity[0];
+        if (typeof workspaceId !== 'string') throw new Error('本地命令回执缺少工作区');
+        const id = receiptId(record.key);
+        db.prepare(`INSERT INTO operations
+          (op_id, batch_id, workspace_id, entity_type, entity_id, project_id,
+           base_revision, new_revision, action, payload_json, actor, created_at)
+          VALUES (?, ?, ?, 'application-receipt', ?, NULL, NULL, 'local-receipt-v1', 'upsert', ?, NULL, ?)`)
+          .run(id, id, workspaceId, id, JSON.stringify(record), new Date().toISOString());
+      },
+    },
     // -- 草稿 --------------------------------------------------------------
     draft: {
       /** 读归属快照。null 仅表示不存在（工作区不匹配由用例层比对后报 PERMISSION_*）。 */
