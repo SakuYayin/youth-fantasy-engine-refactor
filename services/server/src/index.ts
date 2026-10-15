@@ -161,6 +161,61 @@ export {
   systemAdminUserId,
 } from './db/admin.js'
 
+// --- P3-C5 运维存储面（概览 / 探针 / 备份 / 校验 / 恢复） ---
+export { registerAdminStorageRoutes, STORAGE_AUDIT_ACTIONS } from './routes/adminStorage.js'
+export type { AdminStorageRouteDeps } from './routes/adminStorage.js'
+export {
+  ADMIN_PATH_MAX_LENGTH,
+  BACKUP_DIR_NAME,
+  STORAGE_PROBE_KINDS,
+  STORAGE_PROBE_WARNINGS,
+  backupRootFromDataDir,
+  diskSpaceOf,
+  probeRootsFromDataDir,
+  probeStorageTarget,
+  resolveAdminStoragePath,
+  storagePathExists,
+  storageProbeRoots,
+} from './storage/probe.js'
+export type {
+  DiskSpace,
+  ResolvedAdminPath,
+  StorageProbeKind,
+  StorageProbeResult,
+  StorageProbeRoots,
+  StorageProbeWarning,
+} from './storage/probe.js'
+export {
+  BACKUP_FILE_SUFFIX,
+  BACKUP_MANIFEST_SUFFIX,
+  BACKUP_MANIFEST_VERSION,
+  BACKUP_RESTORE_TEMP_SUFFIX,
+  EXPECTED_SERVER_TABLES,
+  assertBackupFileName,
+  backupFileName,
+  createStorageBackup,
+  inspectDatabaseFile,
+  listStorageBackups,
+  manifestPathFor,
+  parseBackupManifest,
+  readBackupManifest,
+  restoreStorageBackup,
+  verifyCopiedDatabaseFile,
+  verifyCopiedDatabaseFileWithHash,
+  verifyStorageBackup,
+} from './storage/backup.js'
+export type {
+  BackupListEntry,
+  BackupManifest,
+  CreateStorageBackupOptions,
+  CreatedStorageBackup,
+  DatabaseInspection,
+  RestoredStorageBackup,
+  RestoreStorageBackupOptions,
+  VerifiedStorageBackup,
+  VerifyStorageBackupOptions,
+} from './storage/backup.js'
+
 export {
   CONFIG_ENTITY_TYPE,
   DEFAULT_CHANGES_LIMIT,

@@ -42,6 +42,7 @@ import type { ServerDb } from '../db/open.js'
 import { registerHealthRoutes } from '../http/health.js'
 import type { RateLimiter } from '../http/rateLimit.js'
 import type { PermissionGuards } from '../permission/index.js'
+import { registerAdminStorageRoutes } from './adminStorage.js'
 import { registerAdminUserRoutes } from './adminUsers.js'
 import { registerAssetRoutes } from './assets.js'
 import { registerAuthRoutes } from './auth.js'
@@ -70,6 +71,20 @@ export interface RouteDeps {
    * 附件存储根（绝对路径）。见文件头"装配方必须注入的两个环境事实"。
    */
   readonly storageRoot: string
+  /**
+   * 服务数据根（`config.dataDir`）。运维存储面用它划"内部/外部"边界：
+   * `dataDir` 之外的路径属于外部目标，需要显式 `acknowledgeExternal` 才允许探测。
+   */
+  readonly dataDir: string
+  /**
+   * 主库文件绝对路径（`config.databasePath`）：存储概览要报告它的大小与版本。
+   */
+  readonly databasePath: string
+  /**
+   * 备份根（默认 `<dataDir>/backups`）。与 `storageRoot` 同理由装配方注入，
+   * 好让运维把备份放到独立卷、测试放到临时目录。
+   */
+  readonly backupRoot?: string
   /**
    * 主密钥文件路径（32 字节 Base64），配对码 pepper 的来源；`null` ⇒ 配对码接口 503。
    */
@@ -242,6 +257,19 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     db: deps.db,
     now: deps.now,
     guards: deps.guards,
+    ...(deps.log === undefined ? {} : { log: deps.log }),
+  })
+
+  // 运维存储面：概览 / 路径探针 / 备份创建与列举 / 校验 / 恢复。
+  // 恢复是唯一需要二次认证（当前管理员密码）+ `maintenance:true` 的接口。
+  registerAdminStorageRoutes(app, {
+    db: deps.db,
+    now: deps.now,
+    guards: deps.guards,
+    dataDir: deps.dataDir,
+    databasePath: deps.databasePath,
+    storageRoot: deps.storageRoot,
+    ...(deps.backupRoot === undefined ? {} : { backupRoot: deps.backupRoot }),
     ...(deps.log === undefined ? {} : { log: deps.log }),
   })
 }

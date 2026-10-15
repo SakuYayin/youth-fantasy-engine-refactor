@@ -83,6 +83,12 @@ export interface CreateServerOptions {
    */
   readonly storageRoot?: string
   /**
+   * 覆盖备份根（默认 `<config.dataDir>/backups`）。
+   *
+   * 与 `storageRoot` 同理：运维可能把备份放到独立卷，测试也不该往仓库里写。
+   */
+  readonly backupRoot?: string
+  /**
    * 直接注入配对 pepper（≥16 字节）。优先于 `config.masterKeyFile`，测试用。
    */
   readonly pairingPepper?: Buffer | Uint8Array
@@ -275,6 +281,10 @@ export function createServer(options: CreateServerOptions): FastifyInstance {
       bootstrapSecretFile: config.bootstrapSecretFile,
       // 附件存储根：路由不读 env，唯一来源是配置（测试可覆盖成临时目录）。
       storageRoot: options.storageRoot ?? storageRootFromDataDir(config.dataDir),
+      // 运维存储面要"内部/外部"边界与库文件位置；都由配置注入，路由不读 env。
+      dataDir: config.dataDir,
+      databasePath: config.databasePath,
+      ...(options.backupRoot === undefined ? {} : { backupRoot: options.backupRoot }),
       // 配对码 pepper 的来源；为 null 时配对码接口 fail closed（503）。
       masterKeyFile: config.masterKeyFile,
       ...(options.pairingPepper === undefined ? {} : { pairingPepper: options.pairingPepper }),
