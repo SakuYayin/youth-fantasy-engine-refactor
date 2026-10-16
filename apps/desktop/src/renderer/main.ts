@@ -124,9 +124,15 @@ window.yfe?.onBeforeClose(() => state.flush())
  * 卸载/关闭时**先冲刷**而不是 `dispose()`：dispose 会作废在途保存，
  * 那样防抖窗口里刚敲的字就真的没了。
  *
- * TODO(P1-B1)：设计文档 02 要求"关窗先询问未提交草稿并等待有限时间"，
- * 那需要 main 进程的 `close` 拦截 + 一条 flush 请求通道；
- * 现在只做到"尽力冲刷"（`beforeunload` 里无法可靠等待异步结果）。
+ * 关窗的主通道是上面那条 `onBeforeClose`（设计文档 02「关窗先询问未提交草稿并等待有限时间」）：
+ * `main` 进程的 `close-guard.mjs` 拦住 `close` 事件 → 发 `yfe:before-close` 带 token →
+ * 渲染层就是这条 `state.flush()` 的返回值 → `saved` 回给 main；**16s 内没拿到 `true`
+ * 才弹原生「放弃草稿？」确认**。所以正常路径不会打扰用户（保存成功即静默退出），
+ * 只有保存失败/超时才会问。
+ *
+ * 这里的 `beforeunload` 是**兜底**：它覆盖 `close` 拦截之外的离开路径
+ * （开发者重载、崩溃恢复前的最后一次机会）。浏览器不允许在 `beforeunload` 里等异步结果，
+ * 所以只能"尽力冲刷"，不能指望它一定是最后一次保存。
  */
 window.addEventListener('beforeunload', () => {
   void state.flush()

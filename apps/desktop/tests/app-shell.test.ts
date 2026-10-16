@@ -507,3 +507,85 @@ describe('App 外壳：首启判定', () => {
     h.wrapper.unmount()
   })
 })
+
+/* ------------------------------------------------------------------ *
+ * R-81：自动缩放必须跟随窗口
+ *
+ * 这三条是回归护栏：`syncAutoZoom()` 存在之前，`--ui-zoom` 只在
+ * `load()`/`save()` 两个时刻被写一次，拖大窗口后界面停在旧缩放上
+ * —— 设置面板写着「自动（跟随窗口）」而实际不跟随。
+ *
+ * 断言只读 `--ui-zoom`（`style.zoom` 在 happy-dom 上支持不稳定，见文件头）。
+ * ------------------------------------------------------------------ */
+
+/** happy-dom 的 `innerWidth` 可在实例上覆盖。 */
+function setWindowWidth(width: number): void {
+  Object.defineProperty(window, 'innerWidth', { value: width, writable: true, configurable: true })
+}
+
+async function fireResize(width: number): Promise<void> {
+  setWindowWidth(width)
+  window.dispatchEvent(new Event('resize'))
+  await nextTick()
+  await nextTick()
+}
+
+describe('App 外壳：自动缩放跟随窗口（R-81）', () => {
+  it('自动模式下窗口变宽，--ui-zoom 跟着变大（1280=100%，每 40px +1%）', async () => {
+    const h = harness({ seen: true, settings: { zoomPercent: 100, zoomManual: false } })
+    await flushPromises()
+    const root = document.documentElement
+
+    expect(root.style.getPropertyValue('--ui-zoom')).toBe('1')
+
+    // 2000 → round(100 + (2000-1280)/40) = 118
+    await fireResize(2000)
+    expect(root.style.getPropertyValue('--ui-zoom')).toBe('1.18')
+
+    // 1680 → round(100 + 10) = 110
+    await fireResize(1680)
+    expect(root.style.getPropertyValue('--ui-zoom')).toBe('1.1')
+
+    h.wrapper.unmount()
+  })
+
+  it('窄屏不缩小到 100% 以下（autoZoomForWidth 的下限）', async () => {
+    const h = harness({ seen: true, settings: { zoomPercent: 118, zoomManual: false } })
+    await flushPromises()
+    const root = document.documentElement
+
+    // 拉动中先记下宽屏值，再压窄：800 → round(88) → max(100,…) = 100
+    await fireResize(2000)
+    expect(root.style.getPropertyValue('--ui-zoom')).toBe('1.18')
+    await fireResize(800)
+    expect(root.style.getPropertyValue('--ui-zoom')).toBe('1')
+
+    h.wrapper.unmount()
+  })
+
+  it('手动模式下 resize 绝不改动缩放', async () => {
+    const h = harness({ seen: true, settings: { zoomPercent: 130, zoomManual: true } })
+    await flushPromises()
+    const root = document.documentElement
+    expect(root.style.getPropertyValue('--ui-zoom')).toBe('1.3')
+
+    await fireResize(2400)
+    expect(root.style.getPropertyValue('--ui-zoom')).toBe('1.3')
+
+    h.wrapper.unmount()
+  })
+
+  it('卸载后 resize 不再生效（监听已移除）', async () => {
+    const h = harness({ seen: true, settings: { zoomPercent: 100, zoomManual: false } })
+    await flushPromises()
+    const root = document.documentElement
+
+    await fireResize(2000)
+    expect(root.style.getPropertyValue('--ui-zoom')).toBe('1.18')
+
+    h.wrapper.unmount()
+    // 卸载后 `settings` 已随组件销毁，但仍残留同一个 DOM 根：值不许再动。
+    await fireResize(1200)
+    expect(root.style.getPropertyValue('--ui-zoom')).toBe('1.18')
+  })
+})

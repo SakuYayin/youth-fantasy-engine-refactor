@@ -493,8 +493,17 @@ async function runElectron(flags) {
   // 沙箱例外必须在 app ready 之前决定（见 applySandboxOverride 的说明）。
   const sandboxDisabled = applySandboxOverride(app);
 
+  /**
+   * GUI 自检跑的是不是**全新 profile**。
+   *
+   * 决定要不要断言「首启必须显示欢迎向导」：`--db-path` 由调用方给定时，
+   * profile 目录是按库路径哈希复用的，上一次跑可能已经写过「已看过」标记。
+   */
+  let guiProfileIsFresh = false;
+
   // GUI 自检独占 profile；不向用户正常数据库和作品记忆写入验收样本。
   if (flags.guiCheck) {
+    guiProfileIsFresh = flags.dbPath === null;
     flags.dbPath ??= join(app.getPath('temp'), 'yfe-gui-check', randomUUID(), '正文.db');
     const profile = join(app.getPath('temp'), 'yfe-gui-check-profiles', createHash('sha256').update(resolve(flags.dbPath)).digest('hex'));
     mkdirSync(profile, { recursive: true });
@@ -700,7 +709,23 @@ async function runElectron(flags) {
           }),
         ]);
         checks = payload.checks;
-        checks.push(...await collectEditorChecks(mainWindow));
+        /**
+         * 编辑器阶段单独兜异常（R-52）。
+         *
+         * 原先两段共用一个 `try`，`collectEditorChecks` 抛错会把**已经跑出来的传输层断言
+         * 整批丢掉**，只剩一行 `gui-check.failed` —— 2026-10-16 那次就是只看到
+         * `界面正文未保存`、看不到 preload/CSP/IPC 那 8 项到底是过还是不过，
+         * 排查时等于瞎猜。现在失败只追加一条，前面的结论和后面的「窗口可见」都保住。
+         */
+        try {
+          checks.push(...await collectEditorChecks(mainWindow, { expectWelcome: guiProfileIsFresh }));
+        } catch (thrown) {
+          checks.push({
+            name: 'ui.editor.failed',
+            ok: false,
+            detail: thrown instanceof Error ? thrown.message : String(thrown),
+          });
+        }
         const deadline = Date.now() + 3000;
         while (!mainWindow.isDestroyed() && !mainWindow.isVisible() && Date.now() < deadline) {
           await new Promise((resolve) => setTimeout(resolve, 100));

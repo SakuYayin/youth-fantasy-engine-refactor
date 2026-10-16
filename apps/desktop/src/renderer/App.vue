@@ -24,7 +24,7 @@ import SettingsPanel from './features/settings-panel.vue'
 import WelcomeWizard from './features/welcome-wizard.vue'
 import { applyThemeAttribute, applyThemeVariables, isConcreteThemeId, themeCssVariablesById, type ThemeHost } from './theme/variables.js'
 import { DEFAULT_THEME_ID, THEME_PALETTES } from './theme/palettes.js'
-import { applyZoom, type ZoomHost } from './theme/zoom.js'
+import { applyZoom, autoZoomForWidth, type ZoomHost } from './theme/zoom.js'
 import type { AppSnapshot, AppState } from './app-state.js'
 import { createCodeMirrorAdapter, type CodeMirrorAdapter } from './editor/codemirror-adapter.js'
 import type { EntityRow } from './schema/entity-row.js'
@@ -141,6 +141,34 @@ function loadSettings(): void {
 }
 
 /**
+ * 🔴 R-81：「跟随窗口」必须**真的跟随窗口**。
+ *
+ * 旧版在 `resize` 时重算缩放并广播 `yfe:zoom-changed`；我们此前只在
+ * `load()`/`save()` 两个时刻重算，于是拖大窗口后界面停在旧缩放上 ——
+ * 设置面板写着「自动（跟随窗口）」，实际不跟随，是最容易在验收时被抓的那种"看起来没生效"。
+ *
+ * 三个细节：
+ * 1. **只在自动模式生效**：`zoomManual` 为真时用户在设置面板选了固定值，
+ *    resize 绝不能把它改掉（旧版 `autoZoom` 同样在有手动值时不参与）。
+ * 2. **同值短路**：拖拽窗口时 resize 每像素一发，没变就 return，
+ *    避免对 `zoom` 反复写同值引起的重排。
+ * 3. **同步 `settings.value`**：不写回去的话，下一次用旧 `settings` 全量重放
+ *    （`openSettings()` → `loadSettings()` 之外的路径）会把缩放弹回旧值。
+ */
+function syncAutoZoom(): void {
+  const current = settings.value
+  if (current === null || current.zoomManual) return
+  const next = autoZoomForWidth(window.innerWidth)
+  if (next === current.zoomPercent) return
+  const applied = applyZoom(document.documentElement as unknown as ZoomHost, next)
+  settings.value = { ...current, zoomPercent: applied }
+}
+
+function onWindowResize(): void {
+  syncAutoZoom()
+}
+
+/**
  * 可见性上下文：预览版先按**完整模板**渲染（`type:'full'` 时 `tabVisible` 恒 true，
  * 与旧版默认的全功能侧栏一致）。M2 的「自定义功能开关」只需把这里换成项目里的 features。
  */
@@ -175,6 +203,7 @@ function currentCreateKey(tabId: string): string {
 let adapter: CodeMirrorAdapter | null = null
 let stopState: (() => void) | null = null
 let stopEditor: (() => void) | null = null
+let stopResize: (() => void) | null = null
 let appliedDocumentId: string | null = null
 let appliedReadOnly = true
 
@@ -208,6 +237,12 @@ function applySnapshotToEditor(): void {
 onMounted(async () => {
   loadSettings()
   view.value = decideInitialView()
+  // R-81：自动缩放的窗口跟随。用原生 `addEventListener` 而不是 Vue 的
+  // `@resize`（`<html>` 不在本组件模板内，模板修饰不到它）。
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('resize', onWindowResize)
+    stopResize = () => window.removeEventListener('resize', onWindowResize)
+  }
 
   stopState = props.state.subscribe((next) => {
     snapshot.value = next
@@ -237,6 +272,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   props.state.setNavigationGuard(null)
+  stopResize?.()
+  stopResize = null
   stopEditor?.()
   stopState?.()
   adapter?.dispose()
