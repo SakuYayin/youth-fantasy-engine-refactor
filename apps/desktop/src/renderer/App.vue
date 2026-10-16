@@ -17,6 +17,8 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 
 import type { AppSettingsView, FeaturePorts } from './features/types.js'
 import { clampSidebarWidth, SIDEBAR_WIDTH } from './features/settings-store.js'
+import { toggleCollapsedGroup } from './schema/sidebar-collapse-model.js'
+import SidebarResizer from './schema/SidebarResizer.vue'
 import { CUSTOM_THEME_ID, type ThemeOption } from './features/settings-panel-model.js'
 import BackupManager from './features/backup-manager.vue'
 import ProjectHub from './features/project-hub.vue'
@@ -313,6 +315,54 @@ function onSettingsChange(next: AppSettingsView): void {
   applySettings(next)
 }
 
+/* ------------------------------------------------------------------ *
+ * 侧栏：分组折叠（A-09）与拖拽调宽（A-10）
+ *
+ * 两者都遵守接口冻结 §0：组件只 emit，**自己不读写 localStorage**，
+ * 落库统一经 `SettingsPort`，外壳只负责把端口返回的视图贴回 `settings`。
+ * ------------------------------------------------------------------ */
+
+/**
+ * 已折叠的分组集合（A-09）。缺省＝空集合＝**全部展开**。
+ *
+ * 上游 `Sidebar.tsx:53-56` 的语义是「存已折叠的组」：以后新增分组时，
+ * 老用户的记录里没有它，落回默认（展开）—— 反过来存"已展开"会让新分组一上来就是收起的。
+ */
+const collapsedGroups = computed<readonly string[]>(() => settings.value?.collapsedGroups ?? [])
+
+/**
+ * 只改设置里的一个字段。
+ *
+ * **不调 `applySettings`**：那会把主题变量与缩放整套重放一遍，而这里只变了一个字段
+ * （设置面板的整体改动才走 `onSettingsChange`）。
+ * 但一定要把端口返回的**持久化后视图**贴回 `settings.value` —— 端口内部先钳制再写，
+ * 于是界面显示的值永远等于磁盘上的值，写失败时自动弹回，不会出现"看着是 300、存的是 224"。
+ */
+function persistSettingsPatch(patch: Partial<AppSettingsView>): void {
+  const current = settings.value
+  if (props.ports === undefined || current === null) return
+  try {
+    settings.value = props.ports.settings.save(patch)
+  } catch {
+    // 端口契约是"永不失败"（types.ts）；真抛了也不能拦开工：界面维持原值，下次操作再试。
+  }
+}
+
+/** 组头点击：取反后整份写回（设置是唯一真相源，组件不记状态）。 */
+function onToggleGroup(group: string): void {
+  persistSettingsPatch({ collapsedGroups: toggleCollapsedGroup(collapsedGroups.value, group) })
+}
+
+/**
+ * 手柄拖拽 / 双击复位：手柄每个 pointermove 帧 emit 一次宽度。
+ *
+ * 每帧一次 localStorage 写 + 一次设置视图更新，与上游「每帧 setState + useEffect 落库」同量级；
+ * 节流是外壳侧的优化（如需 rAF，只改这里），组件契约不用动。
+ */
+function onSidebarResize(width: number): void {
+  persistSettingsPatch({ sidebarWidth: width })
+}
+
 /**
  * 向导收尾。
  *
@@ -477,7 +527,9 @@ function onTakeExternal(): void {
           :groups="tabGroups"
           :active-id="activeTabId"
           :disabled="snapshot.loading"
+          :collapsed-groups="collapsedGroups"
           @select="onSelectTab"
+          @toggle-group="onToggleGroup"
         />
         <YfePanel title="章节" dense>
           <template v-if="snapshot.projectId === null">
@@ -506,6 +558,22 @@ function onTakeExternal(): void {
           </template>
         </YfePanel>
       </aside>
+
+      <!--
+        侧栏宽度手柄（A-10）：独立的 6px flex 子项（不覆盖侧栏、也不需要父层 position:relative），
+        用 pointer 事件拖拽（鼠标/触摸/笔都跟手，拖出窗口不掉），双击复位到 224。
+        组件零 localStorage、零 store 依赖，只 emit；落库走 `onSidebarResize`。
+        设置未加载完（`settings === null`）时禁用，避免把缺省值写进磁盘。
+      -->
+      <SidebarResizer
+        :width="sidebarWidth"
+        :min="SIDEBAR_WIDTH.min"
+        :max="SIDEBAR_WIDTH.max"
+        :initial="SIDEBAR_WIDTH.initial"
+        :disabled="ports === undefined || settings === null"
+        @resize="onSidebarResize"
+        @reset="onSidebarResize"
+      />
 
       <main class="app__main">
         <!-- 编辑器宿主必须常驻（`v-show` 不卸载）：切到设定页签再切回来时 CodeMirror 实例还在。 -->

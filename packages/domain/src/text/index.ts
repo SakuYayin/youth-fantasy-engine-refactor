@@ -649,3 +649,15 @@ function assertString(value: unknown, fn: string): asserts value is string {
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
+
+// ---------------------------------------------------------------------------
+// B-13：上游平台口径的分词与字数（`countWords`，与上面的 `countChars` 字素簇口径**并存**）
+//
+// 由 `cjk.ts` / `count.ts` 提供，必须在**这里**再导出一次：
+// `src/index.ts:16` 只 star-export 了 `./text/index.js`，不会自动带上 `text/*.ts`；
+// 放在这里可同时让 `@yfe/domain`（经根入口传递）与 `@yfe/domain/text`（子路径导出）拿到。
+// 三套字数的分工见 `docs/项目台账.md` R-87：存储/长度校验用 `countChars`，
+// 界面「本章字数」用 `countWords(text, wordCountModeOf(withPunct))`，两者数值本就不等。
+// ---------------------------------------------------------------------------
+export * from './cjk.js'
+export * from './count.js'

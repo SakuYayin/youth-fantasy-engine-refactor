@@ -26,8 +26,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 
 import App from '../src/renderer/App.vue'
+import { clampSidebarWidth } from '../src/renderer/features/settings-store.js'
 import type { AppSettingsView, FeaturePorts, ProjectHubSnapshot } from '../src/renderer/features/types.js'
 import type { AppSnapshot, AppState } from '../src/renderer/app-state.js'
+import SidebarResizer from '../src/renderer/schema/SidebarResizer.vue'
 
 // 与 `app-view.test.ts` 同款：编辑器适配器要打桩，否则 happy-dom 里 CodeMirror 起不来。
 const editor = vi.hoisted(() => ({
@@ -196,7 +198,10 @@ function harness(options: HarnessOptions = {}) {
       load: () => settingsView,
       save: (patch: Partial<AppSettingsView>) => {
         settingsSaves.push(patch)
-        settingsView = { ...settingsView, ...patch }
+        const merged = { ...settingsView, ...patch }
+        // 真实端口 `saveAppSettings` 会先把侧栏宽度钳进 [200,560] 再返回持久化后的视图；
+        // 夹具照做，才能验证外壳用的是"端口返回的值"而不是它自己 emit 的原始值。
+        settingsView = { ...merged, sidebarWidth: clampSidebarWidth(merged.sidebarWidth) }
         return settingsView
       },
       reset: () => {
@@ -587,5 +592,95 @@ describe('App 外壳：自动缩放跟随窗口（R-81）', () => {
     // 卸载后 `settings` 已随组件销毁，但仍残留同一个 DOM 根：值不许再动。
     await fireResize(1200)
     expect(root.style.getPropertyValue('--ui-zoom')).toBe('1.18')
+  })
+})
+
+// ==================== A-09 / A-10：侧栏折叠与宽度手柄的接线 ====================
+
+/** 从 DOM 里取第一个组头，返回它的组 key（不写死组名：组表来自 `@yfe/schema-tabs`）。 */
+function firstGroup(wrapper: ReturnType<typeof mount>): string {
+  const node = wrapper.findAll('[data-testid^="sidebar-group-toggle-"]')[0]
+  if (node === undefined) throw new Error('侧栏里没有组头按钮')
+  return (node.attributes('data-testid') ?? '').replace('sidebar-group-toggle-', '')
+}
+
+describe('App 外壳：侧栏分组折叠接线（A-09）', () => {
+  it('点组头：该组正文不渲染，并把「已折叠集合」整份写回设置', async () => {
+    const h = harness({ seen: true })
+    await flushPromises()
+
+    const group = firstGroup(h.wrapper)
+    const body = `[data-testid="sidebar-group-body-${group}"]`
+    const toggle = `[data-testid="sidebar-group-toggle-${group}"]`
+    expect(h.wrapper.find(body).exists()).toBe(true)
+    expect(h.wrapper.find(toggle).attributes('aria-expanded')).toBe('true')
+
+    await h.wrapper.find(toggle).trigger('click')
+    await flushPromises()
+
+    // 折叠＝整组不渲染（不是 display:none），组头仍在——与上游 Sidebar.tsx:212-213 一致。
+    expect(h.wrapper.find(body).exists()).toBe(false)
+    expect(h.wrapper.find(toggle).exists()).toBe(true)
+    // 组件自己不记状态：唯一的副作用是经设置端口整份写回。
+    expect(h.settingsSaves.at(-1)).toEqual({ collapsedGroups: [group] })
+
+    h.wrapper.unmount()
+  })
+
+  it('设置里已折叠的组：首次渲染就不展开（设置是唯一真相源）', async () => {
+    const probe = harness({ seen: true })
+    await flushPromises()
+    const group = firstGroup(probe.wrapper)
+    probe.wrapper.unmount()
+
+    const h = harness({ seen: true, settings: { collapsedGroups: [group] } })
+    await flushPromises()
+    expect(h.wrapper.find(`[data-testid="sidebar-group-body-${group}"]`).exists()).toBe(false)
+    expect(h.wrapper.find(`[data-testid="sidebar-group-toggle-${group}"]`).attributes('aria-expanded')).toBe('false')
+
+    h.wrapper.unmount()
+  })
+})
+
+describe('App 外壳：侧栏宽度手柄接线（A-10）', () => {
+  it('手柄宽度跟着设置走；拖拽/双击只写设置，界面宽度等于端口返回的持久化值', async () => {
+    const h = harness({ seen: true, settings: { sidebarWidth: 260 } })
+    await flushPromises()
+
+    const handle = h.wrapper.findComponent(SidebarResizer)
+    expect(handle.exists()).toBe(true)
+    expect(handle.props('width')).toBe(260)
+    expect(h.wrapper.find('.app__side').attributes('style')).toContain('width: 260px')
+
+    handle.vm.$emit('resize', 300)
+    await flushPromises()
+    expect(h.settingsSaves.at(-1)).toEqual({ sidebarWidth: 300 })
+    expect(h.wrapper.find('.app__side').attributes('style')).toContain('width: 300px')
+
+    // 超上限：外壳**不自行钳制**，而是照端口返回的视图显示（9999 → 560），
+    // 这样"看到的宽度"永远等于"存下去的宽度"，不会静默不一致。
+    handle.vm.$emit('resize', 9999)
+    await flushPromises()
+    expect(h.settingsSaves.at(-1)).toEqual({ sidebarWidth: 9999 })
+    expect(h.wrapper.find('.app__side').attributes('style')).toContain('width: 560px')
+
+    // 双击复位：同一个 handler，走同样的落库路径。
+    handle.vm.$emit('reset', 224)
+    await flushPromises()
+    expect(h.settingsSaves.at(-1)).toEqual({ sidebarWidth: 224 })
+    expect(h.wrapper.find('.app__side').attributes('style')).toContain('width: 224px')
+
+    h.wrapper.unmount()
+  })
+
+  it('不传 ports 时手柄存在但被禁用（不会把缺省宽度写进磁盘）', async () => {
+    const h = harness({ noPorts: true })
+    await flushPromises()
+
+    const handle = h.wrapper.findComponent(SidebarResizer)
+    expect(handle.exists()).toBe(true)
+    expect(handle.props('disabled')).toBe(true)
+
+    h.wrapper.unmount()
   })
 })
