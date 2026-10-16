@@ -16,7 +16,8 @@ import { YfeButton, YfeDialog, YfePanel, YfeStatusPill, YfeToolbar, YfeTree } fr
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 
 import type { AppSettingsView, FeaturePorts } from './features/types.js'
-import { clampSidebarWidth, SIDEBAR_WIDTH } from './features/settings-store.js'
+import { clampSidebarWidth, DEFAULT_EDITOR_FONT_SIZE, SIDEBAR_WIDTH } from './features/settings-store.js'
+import { isSaveHotkeyEnabled, resolveHotkey } from './features/hotkeys.js'
 import { toggleCollapsedGroup } from './schema/sidebar-collapse-model.js'
 import SidebarResizer from './schema/SidebarResizer.vue'
 import { CUSTOM_THEME_ID, type ThemeOption } from './features/settings-panel-model.js'
@@ -24,6 +25,8 @@ import BackupManager from './features/backup-manager.vue'
 import ProjectHub from './features/project-hub.vue'
 import SettingsPanel from './features/settings-panel.vue'
 import WelcomeWizard from './features/welcome-wizard.vue'
+import EditorStatusBar from './features/editor-status-bar.vue'
+import type { EditorStatusBarPatch } from './features/editor-status-bar-model.js'
 import { applyThemeAttribute, applyThemeVariables, isConcreteThemeId, themeCssVariablesById, type ThemeHost } from './theme/variables.js'
 import { DEFAULT_THEME_ID, THEME_PALETTES } from './theme/palettes.js'
 import { applyZoom, autoZoomForWidth, type ZoomHost } from './theme/zoom.js'
@@ -171,6 +174,35 @@ function onWindowResize(): void {
 }
 
 /**
+ * A-15：window 级快捷键（上游 `src/lib/app/useSaveHotkey.ts` + `App.tsx:335-345`）。
+ *
+ * 上游 2.7.3 的教训是「快捷键在每个面板各抄一份 ⇒ 新增面板必然漏挂」，所以只有一处。
+ * 判定逻辑在 `features/hotkeys.ts`（纯函数、可单测），这里只负责按上游纪律
+ * `preventDefault()` 并分发。
+ *
+ * 🔴 **先看 `defaultPrevented`**：编辑器聚焦时 `Mod-s` 由 CodeMirror 的
+ * `commandKeys`（见下方 `commandKeys: { 'yfe.draft.flush': 'Mod-s' }`）先处理并
+ * `preventDefault()`；事件仍会冒泡到 window，不跳过就会同一次按键存两遍。
+ */
+function onWindowKeydown(event: KeyboardEvent): void {
+  if (event.defaultPrevented) return
+  // saveStatus 是六态枚举，isSaveHotkeyEnabled 的形参类型与它逐字同集：
+  // 若哪天 AppState 新增第七态，这一行会直接编译失败（比运行时兜底更早暴露）。
+  const action = resolveHotkey(event, {
+    saveEnabled: isSaveHotkeyEnabled(snapshot.value.saveStatus),
+  })
+  if (action === null) return
+  event.preventDefault()
+  if (action === 'draft.flush') {
+    void props.state.flush()
+    return
+  }
+  // Ctrl/Cmd+K：上游唤起全文检索面板（FullTextSearch）。预览版该面板还没接入（B-10），
+  // 这里给一句明确回执，不让按键静默失效。
+  notice.value = '全文检索面板还没接入（B-10）：Ctrl / Cmd + K 已登记，面板落地后即生效。'
+}
+
+/**
  * 可见性上下文：预览版先按**完整模板**渲染（`type:'full'` 时 `tabVisible` 恒 true，
  * 与旧版默认的全功能侧栏一致）。M2 的「自定义功能开关」只需把这里换成项目里的 features。
  */
@@ -206,6 +238,7 @@ let adapter: CodeMirrorAdapter | null = null
 let stopState: (() => void) | null = null
 let stopEditor: (() => void) | null = null
 let stopResize: (() => void) | null = null
+let stopHotkeys: (() => void) | null = null
 let appliedDocumentId: string | null = null
 let appliedReadOnly = true
 
@@ -244,6 +277,9 @@ onMounted(async () => {
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
     window.addEventListener('resize', onWindowResize)
     stopResize = () => window.removeEventListener('resize', onWindowResize)
+    // A-15：Ctrl/Cmd+S 与 Ctrl/Cmd+K（window 级，不依赖编辑器是否聚焦）。
+    window.addEventListener('keydown', onWindowKeydown)
+    stopHotkeys = () => window.removeEventListener('keydown', onWindowKeydown)
   }
 
   stopState = props.state.subscribe((next) => {
@@ -276,6 +312,8 @@ onBeforeUnmount(() => {
   props.state.setNavigationGuard(null)
   stopResize?.()
   stopResize = null
+  stopHotkeys?.()
+  stopHotkeys = null
   stopEditor?.()
   stopState?.()
   adapter?.dispose()
@@ -361,6 +399,41 @@ function onToggleGroup(group: string): void {
  */
 function onSidebarResize(width: number): void {
   persistSettingsPatch({ sidebarWidth: width })
+}
+
+/* ------------------------------------------------------------------ *
+ * 编辑器状态栏（A-13）
+ *
+ * 组件是**完全受控**的：自己一个状态都不缓存，每次交互只 emit 一个字段的补丁，
+ * 落库与"贴回视图"由外壳统一走 `persistSettingsPatch`（与侧栏折叠/调宽同一条通道）。
+ * ------------------------------------------------------------------ */
+
+/**
+ * 今日码字。
+ *
+ * 按日统计通道（E-03 / B-17）还没接入 ⇒ **恒 `null`**，状态栏显示「今日 — 字」并说明原因。
+ * 刻意不写 `0`：`0` 的意思是"今天真的一字没写"，与"统计还没做好"是两件事。
+ */
+const todayChars = ref<number | null>(null)
+
+/**
+ * 字数口径开关（R-91）。
+ *
+ * 旧版的「字数含标点」开关还没还原 ⇒ 恒 `false`（只算汉字），这也是旧版默认档。
+ */
+const wordCountWithPunct = false
+
+/** 正文字号：设置是唯一真相源，缺省用默认档。 */
+const editorFontSize = computed<string>(() => settings.value?.fontSize ?? DEFAULT_EDITOR_FONT_SIZE)
+
+/**
+ * 状态栏发出的补丁只会是 `{ fontSize }` / `{ pageWide }` / `{ typewriter }` 之一。
+ *
+ * 必须经 `persistSettingsPatch` 把端口返回的持久化视图贴回 `settings.value` ——
+ * 组件受控，不刷新的话点了开关不会动。
+ */
+function onStatusBarChange(patch: EditorStatusBarPatch): void {
+  persistSettingsPatch(patch)
 }
 
 /**
@@ -623,6 +696,7 @@ function onTakeExternal(): void {
               v-else-if="activeTab !== null"
               :state="state"
               :tab="activeTab"
+              @navigate="onSelectTab"
             />
             <p v-else class="app__hint">
               尚未选择任何页签。
@@ -631,13 +705,26 @@ function onTakeExternal(): void {
         </template>
 
         <footer class="app__footer">
-          <span v-if="notice !== ''" class="app__error">{{ notice }}</span>
-          <span class="app__meta">{{ snapshot.charCount }} 字</span>
-          <span v-if="snapshot.selectedDocumentId === null" class="app__hint">左侧选择一章开始写作。</span>
-          <span v-if="snapshot.databasePath !== null" class="app__meta app__path">{{ snapshot.databasePath }}</span>
-          <span v-if="snapshot.lastError !== null" class="app__error">
-            {{ snapshot.lastError.code }}：{{ snapshot.lastError.message }}
-          </span>
+          <EditorStatusBar
+            v-if="isEditorTab"
+            :text="snapshot.body"
+            :word-count-with-punct="wordCountWithPunct"
+            :today-chars="todayChars"
+            :page-wide="settings?.pageWide ?? true"
+            :typewriter="settings?.typewriter ?? false"
+            :font-size="editorFontSize"
+            :read-only="snapshot.readOnly"
+            @change="onStatusBarChange"
+          />
+          <div class="app__footer-meta">
+            <span v-if="notice !== ''" class="app__error" data-testid="app-notice">{{ notice }}</span>
+            <span class="app__meta">{{ snapshot.charCount }} 字</span>
+            <span v-if="snapshot.selectedDocumentId === null" class="app__hint">左侧选择一章开始写作。</span>
+            <span v-if="snapshot.databasePath !== null" class="app__meta app__path">{{ snapshot.databasePath }}</span>
+            <span v-if="snapshot.lastError !== null" class="app__error">
+              {{ snapshot.lastError.code }}：{{ snapshot.lastError.message }}
+            </span>
+          </div>
         </footer>
       </main>
     </div>
@@ -794,11 +881,25 @@ function onTakeExternal(): void {
 
 .app__footer {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 6px 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  /*
+   * 上下 padding 交给两行自己：A-13 的状态栏自带 40px 行高（含它的 12px 横向内边距），
+   * 这里再加 6px 会让整条 footer 比上游高一圈。
+   */
+  padding: 0 0 6px;
   border-top: 1px solid var(--yfe-color-border, #262a33);
   font-size: 12px;
+}
+
+/* 原来的单行元信息（字数 / 库路径 / 错误回执），保持横向一排。 */
+.app__footer-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  min-height: 18px;
 }
 
 .app__path {

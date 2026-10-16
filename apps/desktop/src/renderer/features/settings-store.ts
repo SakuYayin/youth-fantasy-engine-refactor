@@ -52,6 +52,16 @@ export const SETTINGS_KEYS = Object.freeze({
   sidebarWidth: 'yfe-sidebar-w',
   collapsedGroups: 'yfe-ui:sidebar-collapsed-groups',
   dockCollapsed: 'yfe-ui:dock-collapsed',
+  /**
+   * 码字区铺满窗口。
+   *
+   * 旧版键是 `novel-page-wide`（`useNovelEditorModel`），这里换成 `yfe-` 前缀：
+   * 本仓已经有两套历史前缀（`yfe-*` 老键与 `yfe-ui:*` 新键），A-13 的状态栏
+   * 是本仓新做的承载面，沿用旧版裸 `novel-*` 命名只会让键名更难回收。
+   */
+  pageWide: 'yfe-editor-page-wide',
+  /** 打字机模式。旧版键 `novel-typewriter`。 */
+  typewriter: 'yfe-editor-typewriter',
 })
 
 /** 侧栏宽度：上游 `useResizable({initial:224, initialWide:300, min:200, max:560})`。 */
@@ -59,7 +69,12 @@ export const SIDEBAR_WIDTH = Object.freeze({ initial: 224, wide: 300, min: 200, 
 /** 屏宽达到该值视为大屏，默认用 `SIDEBAR_WIDTH.wide`。上游 `useResizable.ts:16`。 */
 export const WIDE_SCREEN_THRESHOLD = 2000
 
-/** 正文字号可选档（设置面板的下拉项）。上游正文用 `font-serif` 栈 + 独立字号控件。 */
+/**
+ * 正文字号可选档（设置面板的下拉项）。上游正文用 `font-serif` 栈 + 独立字号控件。
+ *
+ * A-13 的状态栏按上游 `useNovelEditorModel` 允许 14–28px 逐 px 增减，
+ * 故这里补齐 24/26/28 三档，避免「状态栏能到 28、设置面板选不出 24」的自相矛盾。
+ */
 export const FONT_SIZE_OPTIONS: readonly string[] = Object.freeze([
   '14px',
   '15px',
@@ -68,6 +83,9 @@ export const FONT_SIZE_OPTIONS: readonly string[] = Object.freeze([
   '18px',
   '20px',
   '22px',
+  '24px',
+  '26px',
+  '28px',
 ])
 
 /** 字号范围（防止脏存储把正文撑爆布局）。 */
@@ -242,6 +260,32 @@ export function writeCollapsedGroups(storage: SettingsStorage, groupIds: readonl
   return safeWrite(storage, SETTINGS_KEYS.collapsedGroups, JSON.stringify([...new Set(groupIds)]))
 }
 
+/**
+ * 码字区是否铺满窗口。
+ *
+ * 布尔一律按 `'1'` / `'0'` 存（与 `dockCollapsed` 同约定）：`localStorage` 只能存字符串，
+ * 两种约定混用会让「读回来是 `'false'` 真值」这类坑重新出现。**缺键 = `true`**
+ * （旧版默认铺满，见 `useNovelEditorModel`），脏值也回落到默认。
+ */
+export function readPageWide(storage: SettingsStorage): boolean {
+  const raw = safeRead(storage, SETTINGS_KEYS.pageWide)
+  if (raw === null) return true
+  return raw === '1'
+}
+
+export function writePageWide(storage: SettingsStorage, value: boolean): boolean {
+  return safeWrite(storage, SETTINGS_KEYS.pageWide, value ? '1' : '0')
+}
+
+/** 打字机模式（默认关）。约定同 `readPageWide`。 */
+export function readTypewriter(storage: SettingsStorage): boolean {
+  return safeRead(storage, SETTINGS_KEYS.typewriter) === '1'
+}
+
+export function writeTypewriter(storage: SettingsStorage, value: boolean): boolean {
+  return safeWrite(storage, SETTINGS_KEYS.typewriter, value ? '1' : '0')
+}
+
 /** 左下角工具栏是否收起（默认展开）。 */
 export function readDockCollapsed(storage: SettingsStorage): boolean {
   return safeRead(storage, SETTINGS_KEYS.dockCollapsed) === '1'
@@ -333,6 +377,8 @@ export function readAppSettings(storage: SettingsStorage, windowWidth: number): 
     zoomManual: !isZoomAuto(storage),
     sidebarWidth: readSidebarWidth(storage, windowWidth),
     collapsedGroups: readCollapsedGroups(storage),
+    pageWide: readPageWide(storage),
+    typewriter: readTypewriter(storage),
   })
 }
 
@@ -366,6 +412,8 @@ export function saveAppSettings(
     })
   }
   if (patch.fontSize !== undefined) writeEditorFontSize(storage, patch.fontSize)
+  if (patch.pageWide !== undefined) writePageWide(storage, patch.pageWide)
+  if (patch.typewriter !== undefined) writeTypewriter(storage, patch.typewriter)
   return readAppSettings(storage, windowWidth)
 }
 

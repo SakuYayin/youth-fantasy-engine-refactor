@@ -896,6 +896,9 @@ describe('createSettingsPort', () => {
       zoomManual: false,
       sidebarWidth: 224,
       collapsedGroups: [],
+      // 旧版 `novel-page-wide` 默认铺满、`novel-typewriter` 默认关（键缺省即这两值）。
+      pageWide: true,
+      typewriter: false,
     })
   })
 
@@ -936,7 +939,7 @@ describe('createSettingsPort', () => {
     expect(view.zoomPercent).toBe(108)
   })
 
-  it('save() 返回重新读出来的完整七字段视图', () => {
+  it('save() 返回重新读出来的完整九字段视图', () => {
     const h = makeHarness()
 
     const view = h.settings.save({
@@ -944,14 +947,18 @@ describe('createSettingsPort', () => {
       fontSize: '18px',
       sidebarWidth: 260,
       collapsedGroups: ['world'],
+      pageWide: false,
+      typewriter: true,
     })
 
     expect(Object.keys(view).sort()).toEqual([
       'collapsedGroups',
       'fontFamily',
       'fontSize',
+      'pageWide',
       'sidebarWidth',
       'themeId',
+      'typewriter',
       'zoomManual',
       'zoomPercent',
     ])
@@ -964,6 +971,8 @@ describe('createSettingsPort', () => {
       zoomManual: false,
       sidebarWidth: 260,
       collapsedGroups: ['world'],
+      pageWide: false,
+      typewriter: true,
     })
   })
 
@@ -995,6 +1004,8 @@ describe('createSettingsPort', () => {
       [SETTINGS_KEYS.fontPrefs]: JSON.stringify({ editor: '楷体', ui: '' }),
       [SETTINGS_KEYS.sidebarWidth]: '300',
       [SETTINGS_KEYS.collapsedGroups]: JSON.stringify(['world']),
+      [SETTINGS_KEYS.pageWide]: '0',
+      [SETTINGS_KEYS.typewriter]: '1',
       [EDITOR_FONT_SIZE_KEY]: '22px',
     })
     const h = makeHarness({ storage })
@@ -1011,7 +1022,29 @@ describe('createSettingsPort', () => {
       zoomManual: false,
       sidebarWidth: 224,
       collapsedGroups: [],
+      pageWide: true,
+      typewriter: false,
     })
+  })
+
+  it("pageWide / typewriter 用 '1'/'0' 存储，缺键分别是 true / false", () => {
+    const initial = makeHarness().settings.load()
+    expect(initial.pageWide).toBe(true)
+    expect(initial.typewriter).toBe(false)
+
+    const saved = makeHarness().settings.save({ pageWide: false, typewriter: true })
+    expect(saved.pageWide).toBe(false)
+    expect(saved.typewriter).toBe(true)
+
+    // 脏值只认 '1'：`'true'` / `'0'` / 任意垃圾字符串都不能被当真值读出来。
+    const dirty = makeHarness({
+      storage: memoryStorage({
+        [SETTINGS_KEYS.pageWide]: 'true',
+        [SETTINGS_KEYS.typewriter]: '0',
+      }),
+    }).settings.load()
+    expect(dirty.pageWide).toBe(false)
+    expect(dirty.typewriter).toBe(false)
   })
 
   it('storage.getItem 抛异常时 load() 仍返回默认视图而不是崩', () => {
@@ -1025,6 +1058,8 @@ describe('createSettingsPort', () => {
       zoomManual: false,
       sidebarWidth: 224,
       collapsedGroups: [],
+      pageWide: true,
+      typewriter: false,
     })
   })
 

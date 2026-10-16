@@ -14,7 +14,9 @@
  *    换主题时上一套的变量要被清掉（浅色主题不能残留深色 ink 刻度）；
  * 5. 侧栏宽度跟着设置走（`clampSidebarWidth` 到 [200,560]）；
  * 6. 设置面板 `emit('change')` 之后，**外壳自己的**字体/缩放也要跟着走（否则改了字号只有面板知道）；
- * 7. 首启判定：`welcome.seen()` 为假 → 进向导；为真 → 直接写作页；端口抛异常 → 也进写作页（不白屏）。
+ * 7. 首启判定：`welcome.seen()` 为假 → 进向导；为真 → 直接写作页；端口抛异常 → 也进写作页（不白屏）；
+ * 8. A-15 全局快捷键：Ctrl/Cmd+S 只在「有未保存改动」时调 `state.flush()` 并 `preventDefault`，
+ *    没改动时**不吞**浏览器默认行为；编辑器已处理（`defaultPrevented`）时不重复保存；卸载后解绑。
  *
  * 环境差异（happy-dom + VTU 2.5.1）：
  * - `get(...)` 没有 `.exists()`，缺失性用 `find(...).exists()`；
@@ -30,6 +32,7 @@ import { clampSidebarWidth } from '../src/renderer/features/settings-store.js'
 import type { AppSettingsView, FeaturePorts, ProjectHubSnapshot } from '../src/renderer/features/types.js'
 import type { AppSnapshot, AppState } from '../src/renderer/app-state.js'
 import SidebarResizer from '../src/renderer/schema/SidebarResizer.vue'
+import EditorStatusBar from '../src/renderer/features/editor-status-bar.vue'
 
 // 与 `app-view.test.ts` 同款：编辑器适配器要打桩，否则 happy-dom 里 CodeMirror 起不来。
 const editor = vi.hoisted(() => ({
@@ -69,6 +72,9 @@ const BASE_SETTINGS: AppSettingsView = {
   zoomManual: false,
   sidebarWidth: 224,
   collapsedGroups: [],
+  // A-13 状态栏带来的两个界面开关（旧版 `novel-page-wide` / `novel-typewriter`）。
+  pageWide: true,
+  typewriter: false,
 }
 
 function makeSnapshot(patch: Partial<AppSnapshot> = {}): AppSnapshot {
@@ -124,6 +130,9 @@ function harness(options: HarnessOptions = {}) {
   let notify: ((snapshot: AppSnapshot) => void) | null = null
   let snapshot = makeSnapshot(options.projectId === undefined ? {} : { projectId: options.projectId })
 
+  // A-15：Ctrl/Cmd+S 的分发目标是 `state.flush()`，用 spy 断言"存了一次/没存"。
+  const flush = vi.fn(async () => true)
+
   const state: AppState = {
     getSnapshot: () => snapshot,
     subscribe: (listener: (snapshot: AppSnapshot) => void) => {
@@ -139,7 +148,7 @@ function harness(options: HarnessOptions = {}) {
     createChapter: async () => true,
     selectDocument: async () => true,
     edit: () => {},
-    flush: async () => true,
+    flush,
     applyExternalUpdate: async () => true,
     retrySave: async () => true,
     resolveConflict: async () => true,
@@ -226,6 +235,7 @@ function harness(options: HarnessOptions = {}) {
   return {
     wrapper,
     state,
+    flush,
     ports,
     settingsSaves,
     markSeen,
@@ -680,6 +690,234 @@ describe('App 外壳：侧栏宽度手柄接线（A-10）', () => {
     const handle = h.wrapper.findComponent(SidebarResizer)
     expect(handle.exists()).toBe(true)
     expect(handle.props('disabled')).toBe(true)
+
+    h.wrapper.unmount()
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * A-15 全局快捷键（window 级）
+ *
+ * 上游 `src/lib/app/useSaveHotkey.ts` 的核心不是说"能按 Ctrl+S 保存"，
+ * 而是两条纪律：
+ *   · **只在有改动时**才 `preventDefault()` —— 没改动的面板不该吞掉浏览器的「保存网页」；
+ *   · 判定收敛成一处，新增面板不会再漏挂（旧版 2.7.3 前五处各抄一遍，
+ *     2.4.2/2.7.2 新增的六个页签全漏了 Ctrl+S）。
+ *
+ * 我们还有第三种来路要挡住：编辑器聚焦时 `Mod-s` 已由 CodeMirror 的
+ * `commandKeys` 处理并 `preventDefault()`，事件仍会冒泡到 window，
+ * 不跳过就会同一次按键存两遍。
+ * ------------------------------------------------------------------ */
+
+interface KeyInit {
+  readonly key: string
+  readonly ctrlKey?: boolean
+  readonly metaKey?: boolean
+  readonly altKey?: boolean
+}
+
+/** 派发一次 window 级 keydown，返回事件本体（用来断言 `defaultPrevented`）。 */
+function fireKeydown(init: KeyInit): KeyboardEvent {
+  const event = new KeyboardEvent('keydown', {
+    key: init.key,
+    ctrlKey: init.ctrlKey ?? false,
+    metaKey: init.metaKey ?? false,
+    altKey: init.altKey ?? false,
+    bubbles: true,
+    cancelable: true,
+  })
+  window.dispatchEvent(event)
+  return event
+}
+
+describe('App 外壳：全局快捷键接线（A-15）', () => {
+  it('有未保存改动时 Ctrl+S → 调 state.flush() 并 preventDefault', async () => {
+    const h = harness({ seen: true })
+    await flushPromises()
+    await h.publish({ saveStatus: 'dirty' })
+
+    const event = fireKeydown({ key: 's', ctrlKey: true })
+    await flushPromises()
+
+    expect(h.flush).toHaveBeenCalledTimes(1)
+    expect(event.defaultPrevented).toBe(true)
+
+    h.wrapper.unmount()
+  })
+
+  it('Cmd+S 同样生效（macOS）', async () => {
+    const h = harness({ seen: true })
+    await flushPromises()
+    await h.publish({ saveStatus: 'error' }) // error 也表示"稿子还没存上"，应当能重试
+
+    fireKeydown({ key: 'S', metaKey: true })
+    await flushPromises()
+
+    expect(h.flush).toHaveBeenCalledTimes(1)
+
+    h.wrapper.unmount()
+  })
+
+  it('没有未保存改动时不保存，且**不吞**浏览器默认行为', async () => {
+    const h = harness({ seen: true })
+    await flushPromises()
+    await h.publish({ saveStatus: 'saved' })
+
+    const event = fireKeydown({ key: 's', ctrlKey: true })
+    await flushPromises()
+
+    expect(h.flush).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
+
+    h.wrapper.unmount()
+  })
+
+  it('保存中 / 冲突 / 离线态都不触发（六态里只有 dirty 与 error 算「待存」）', async () => {
+    const h = harness({ seen: true })
+    await flushPromises()
+
+    for (const status of ['saving', 'conflict', 'offline'] as const) {
+      await h.publish({ saveStatus: status })
+      fireKeydown({ key: 's', ctrlKey: true })
+      await flushPromises()
+    }
+
+    expect(h.flush).not.toHaveBeenCalled()
+
+    h.wrapper.unmount()
+  })
+
+  it('Ctrl+Alt+S 留给系统，不拦也不保存', async () => {
+    const h = harness({ seen: true })
+    await flushPromises()
+    await h.publish({ saveStatus: 'dirty' })
+
+    const event = fireKeydown({ key: 's', ctrlKey: true, altKey: true })
+    await flushPromises()
+
+    expect(h.flush).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
+
+    h.wrapper.unmount()
+  })
+
+  it('编辑器已处理过（defaultPrevented）时不重复保存', async () => {
+    const h = harness({ seen: true })
+    await flushPromises()
+    await h.publish({ saveStatus: 'dirty' })
+
+    // 模拟 CodeMirror 在自己的 keydown 处理里已经 preventDefault：事件仍冒泡到 window，
+    // 但 `defaultPrevented` 为真 —— 外壳必须让路。
+    const event = new KeyboardEvent('keydown', {
+      key: 's',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    event.preventDefault()
+    window.dispatchEvent(event)
+    await flushPromises()
+
+    expect(h.flush).not.toHaveBeenCalled()
+
+    h.wrapper.unmount()
+  })
+
+  it('Ctrl+K 给一句明确回执（全文检索面板未接入，不让按键静默失效）', async () => {
+    const h = harness({ seen: true })
+    await flushPromises()
+
+    const event = fireKeydown({ key: 'k', ctrlKey: true })
+    await flushPromises()
+
+    expect(event.defaultPrevented).toBe(true)
+    const notice = h.wrapper.find('[data-testid="app-notice"]')
+    expect(notice.exists()).toBe(true)
+    expect(notice.text()).toContain('全文检索')
+    expect(notice.text()).toContain('B-10')
+
+    h.wrapper.unmount()
+  })
+
+  it('退出后解绑：卸载组件再按 Ctrl+S 不会再触发', async () => {
+    const h = harness({ seen: true })
+    await flushPromises()
+    await h.publish({ saveStatus: 'dirty' })
+
+    h.wrapper.unmount()
+    fireKeydown({ key: 's', ctrlKey: true })
+    await flushPromises()
+
+    expect(h.flush).not.toHaveBeenCalled()
+  })
+})
+
+describe('App 外壳：编辑器状态栏接线（A-13）', () => {
+  it('状态栏渲染在 footer：本章字数按汉字口径，今日显示"未接入"的横线', async () => {
+    const h = harness({ seen: true })
+    await flushPromises()
+
+    const bar = h.wrapper.findComponent(EditorStatusBar)
+    expect(bar.exists()).toBe(true)
+    expect(bar.props('text')).toBe('原始正文')
+    expect(bar.props('wordCountWithPunct')).toBe(false)
+    expect(bar.props('todayChars')).toBeNull()
+    expect(bar.props('pageWide')).toBe(true)
+    expect(bar.props('typewriter')).toBe(false)
+    expect(bar.props('fontSize')).toBe('16px')
+
+    expect(h.wrapper.find('[data-testid="editor-status-bar-chapter-words"]').text()).toContain('4')
+    expect(h.wrapper.find('[data-testid="editor-status-bar-today-words"]').text()).toContain('—')
+
+    h.wrapper.unmount()
+  })
+
+  it('点「铺满」与「打字机」各只写一个字段的补丁，界面跟着端口返回的视图走', async () => {
+    const h = harness({ seen: true })
+    await flushPromises()
+
+    await h.wrapper.find('[data-testid="editor-status-bar-page-wide"]').trigger('click')
+    await flushPromises()
+    expect(h.settingsSaves.at(-1)).toEqual({ pageWide: false })
+    expect(h.wrapper.findComponent(EditorStatusBar).props('pageWide')).toBe(false)
+
+    await h.wrapper.find('[data-testid="editor-status-bar-typewriter"]').trigger('click')
+    await flushPromises()
+    expect(h.settingsSaves.at(-1)).toEqual({ typewriter: true })
+    expect(h.wrapper.findComponent(EditorStatusBar).props('typewriter')).toBe(true)
+
+    h.wrapper.unmount()
+  })
+
+  it('字号加减写 `{ fontSize }` 补丁，界面等于端口返回的持久化值', async () => {
+    const h = harness({ seen: true, settings: { fontSize: '17px' } })
+    await flushPromises()
+
+    await h.wrapper.find('[data-testid="editor-status-bar-font-increase"]').trigger('click')
+    await flushPromises()
+    expect(h.settingsSaves.at(-1)).toEqual({ fontSize: '18px' })
+    expect(h.wrapper.findComponent(EditorStatusBar).props('fontSize')).toBe('18px')
+
+    await h.wrapper.find('[data-testid="editor-status-bar-font-decrease"]').trigger('click')
+    await flushPromises()
+    expect(h.settingsSaves.at(-1)).toEqual({ fontSize: '17px' })
+    expect(h.wrapper.findComponent(EditorStatusBar).props('fontSize')).toBe('17px')
+
+    h.wrapper.unmount()
+  })
+
+  it('只读时状态栏收到 readOnly，点设置项不写任何补丁（实时字数照常显示）', async () => {
+    const h = harness({ seen: true })
+    await flushPromises()
+    await h.publish({ readOnly: true })
+
+    expect(h.wrapper.findComponent(EditorStatusBar).props('readOnly')).toBe(true)
+    expect(h.wrapper.find('[data-testid="editor-status-bar-chapter-words"]').exists()).toBe(true)
+
+    await h.wrapper.find('[data-testid="editor-status-bar-page-wide"]').trigger('click')
+    await h.wrapper.find('[data-testid="editor-status-bar-typewriter"]').trigger('click')
+    await flushPromises()
+    expect(h.settingsSaves).toEqual([])
 
     h.wrapper.unmount()
   })

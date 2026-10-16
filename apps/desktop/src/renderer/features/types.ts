@@ -144,6 +144,15 @@ export interface AppSettingsView {
   readonly sidebarWidth: number
   /** 已折叠的侧栏分组 id。 */
   readonly collapsedGroups: readonly string[]
+  /**
+   * 码字区是否铺满窗口（`true` = 不限宽）。
+   *
+   * 旧版键 `novel-page-wide` 默认 `true`；A-13 的状态栏按钮与它同源。
+   * 本仓键名见 `SETTINGS_KEYS.pageWide`。
+   */
+  readonly pageWide: boolean
+  /** 打字机模式（光标行居中滚动）。旧版键 `novel-typewriter` 默认 `false`。 */
+  readonly typewriter: boolean
 }
 
 /**

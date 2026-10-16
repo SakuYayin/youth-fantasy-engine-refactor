@@ -75,6 +75,8 @@ const INITIAL: AppSettingsView = Object.freeze({
   zoomManual: true,
   sidebarWidth: 224,
   collapsedGroups: Object.freeze([]),
+  pageWide: true,
+  typewriter: false,
 })
 
 /**

@@ -57,7 +57,7 @@ const THEMES: readonly ThemeOption[] = Object.freeze([
   { id: CUSTOM_THEME_ID, name: '自定义', desc: '母版派生 · 可调色', swatch: 'conic-gradient(#e88, #8c8)' },
 ])
 
-/** 一个完整的设置视图（七字段齐全，避免局部对象被误当成完整视图）。 */
+/** 一个完整的设置视图（九字段齐全，避免局部对象被误当成完整视图）。 */
 function makeView(patch: Partial<AppSettingsView> = {}): AppSettingsView {
   return Object.freeze({
     themeId: 'eye-care',
@@ -67,6 +67,8 @@ function makeView(patch: Partial<AppSettingsView> = {}): AppSettingsView {
     zoomManual: true,
     sidebarWidth: 224,
     collapsedGroups: Object.freeze([]),
+    pageWide: true,
+    typewriter: false,
     ...patch,
   })
 }
@@ -198,8 +200,19 @@ describe('字体：选项构造与回落', () => {
     expect(FONT_CHOICES.map((choice) => choice.label)).toContain('霞鹜文楷')
   })
 
-  it('字号选项逐字来自 FONT_SIZE_OPTIONS（7 档，含默认 16px）', () => {
-    expect(FONT_SIZE_CHOICES).toEqual(['14px', '15px', '16px', '17px', '18px', '20px', '22px'])
+  it('字号选项逐字来自 FONT_SIZE_OPTIONS（10 档，含默认 16px）', () => {
+    expect(FONT_SIZE_CHOICES).toEqual([
+      '14px',
+      '15px',
+      '16px',
+      '17px',
+      '18px',
+      '20px',
+      '22px',
+      '24px',
+      '26px',
+      '28px',
+    ])
     expect(FONT_SIZE_CHOICES).toContain('16px')
   })
 
