@@ -1,0 +1,497 @@
+/**
+ * 【移植记录】上游 `src/lib/tavern/paramGuide.ts` → 本包 `src/paramGuide.ts`（逐字搬运）。
+ *
+ * 【这个文件解决什么问题】控制面板上每个数值项原先只写一句「通常 1.05」—— 用户知道了默认值，
+ *   却不知道**调进这一段会发生什么**，想按自己的需求微调时无从下手。本文件把每个参数切成若干
+ *   首尾相接的区间，逐段写清「输入 → 输出」的因果影响，界面据此高亮当前值所在的那一段；
+ *   它同时是 min / max / step / unit 的**唯一真源**，输入框不再各写一份范围 ——
+ *   否则「说明里写的范围」与「输入框实际允许的范围」迟早对不上，而说明写错比没写更坏。
+ *
+ * 【上下游行为差异】**零行为差异**，只有类型层适配：
+ *   本仓开了 `noUncheckedIndexedAccess`，上游靠 `moduleResolution: bundler` 下的
+ *   「数组下标即元素类型」推断；这里给 4 处**逻辑上必然有值**的下标补了非空断言 `!`
+ *   （`bandOf` 的末段、`tidyEdges` 的 `out[out.length-1]`、`dynamicGuide` 的
+ *   `froms/tos[recIdx]` 与 `tos[i]`、`texts[...]`）。断言的成立前提与上游一致
+ *   （bands 至少一段；froms / tos / texts 三者等长且非空），运行期取值与上游逐字相同。
+ *
+ * 本文件零 import、纯数据 + 纯函数，不含 React，也不引任何运行时依赖。
+ *
+ * 控制面板 · 数值项的「取值范围 + 分段影响」
+ *
+ * 【为什么单独一份】
+ * 以前每个输入框旁边只有一句「通常 1.05」—— 用户知道了默认值，却不知道**这一段意味着什么**，
+ * 想按自己的需求微调时无从下手（老大的原话：说明比较简陋）。这里把每个参数切成若干段，
+ * 写清**每一段对模型输入输出的影响**，界面上高亮当前值所在的那一段。
+ *
+ * 【它同时是 min/max/step/unit 的唯一真源】
+ * 输入框从这份表取范围，不再在 JSX 里各写一份 —— 否则「说明里写的范围」和「输入框实际允许的范围」
+ * 迟早对不上，而**说明写错比没写更坏**。`tests/paramGuide.test.ts` 会锁住：
+ * 分段必须首尾相接、无空隙无重叠、完整覆盖 [min,max]，且恰好有一个推荐段。
+ *
+ * 【分段判定的口径】
+ * `bandOf()` 取「第一个 `to >= v` 的段」—— 段是升序且首尾相接的，所以
+ * **边界值（正好等于某段上界）归下面那一段**：温度 0.7 高亮「保守」、1.1 高亮「平衡」。
+ * 这与直觉一致（处在某段最上沿的值，性质仍属那一段），也免得「越调越飘」的错觉。
+ * 表里显示的范围两端都是闭区间，所以边界值在两行里都合理出现，高亮取靠下的那一段。
+ * `from === to` 的段（如 topK 的「关闭」）只在 v 正好等于它时命中。
+ *
+ * 【写文案的三条纪律】
+ *  ① 说**影响**，不说好坏：「措辞高度可预测，很少出意外」优于「效果更好」；
+ *  ② 一段话讲清**输入→输出**的因果关系（温度高 → 采样面变宽 → 会跑题），别只给形容词；
+ *  ③ 端点段要写得**极端**，因为用户真的会拉到端点 —— 那时应该明确告诉他「不要进这一段」。
+ *
+ * 本文件纯数据 + 纯函数，不含 React，也不引任何运行时依赖。
+ */
+
+/** 一个数值区间段 */
+export type ParamBand = {
+  /** 段下界（含） */
+  from: number
+  /** 段上界（含）；等于 from 表示这是个「单点段」（如 topK=0 的「关闭」） */
+  to: number
+  /** 2~4 字档名，用于一眼扫过 */
+  name: string
+  /** 这一段对模型输入输出的影响（说因果，别说好坏） */
+  effect: string
+  /** 内置默认值落在这一段。每个 guide **恰好**一个 */
+  recommended?: boolean
+}
+
+export type ParamGuide = {
+  min: number
+  max: number
+  step: number
+  /** 单位（显示在标题括号里）；无单位留空 */
+  unit?: string
+  bands: ParamBand[]
+}
+
+/** 采样类参数：剧情推演与自由对话**语义完全相同**，共用一份（差异写在各自那条 hint 里） */
+const GUIDE_TEMPERATURE: ParamGuide = {
+  min: 0, max: 2, step: 0.05,
+  bands: [
+    { from: 0, to: 0.4, name: '死板', effect: '几乎每次都给同一个回答，角色像在念设定稿 —— 措辞不变，同一句话总是同样的反应。只在「必须严格照设定走、不许发挥」时用。' },
+    { from: 0.4, to: 0.7, name: '保守', effect: '措辞有变化，但走向高度可预测，角色很稳、很少出意外。适合信息量大、要严谨推进的场合（复盘、对质）。' },
+    { from: 0.7, to: 1.1, name: '平衡', effect: '角色一致性还在，同时会冒出意料之外的细节与转折 —— 推演要的「像活人」就在这一段。', recommended: true },
+    { from: 1.1, to: 1.5, name: '活跃', effect: '转折多、脑洞多，代价是开始人设漂移：语气变了、自称变了、忘了刚说过的话。' },
+    { from: 1.5, to: 2, name: '放飞', effect: '接近随机抽样，常出现语句破碎、前后矛盾、突然换人称。只在故意要「醉酒 / 发疯」效果时进这一段。' },
+  ],
+}
+
+const GUIDE_TOP_P: ParamGuide = {
+  min: 0, max: 1, step: 0.01,
+  bands: [
+    { from: 0, to: 0.2, name: '掐死长尾', effect: '每步只从最可能的一两个词里挑，回复极度重复模板化（「嗯。」「好。」），几乎没有新的表达方式。' },
+    { from: 0.2, to: 0.5, name: '保守', effect: '用词保守但句子还算自然；长句、生僻说法基本不会出现。' },
+    { from: 0.5, to: 0.8, name: '偏保守', effect: '表达比上一段丰富，仍以常见词为主，很少出人意料。' },
+    { from: 0.8, to: 0.95, name: '平衡', effect: '保留绝大多数自然表达，只切掉最离谱的尾部，是通用推荐区。', recommended: true },
+    { from: 0.95, to: 1, name: '不过滤', effect: '长尾词全进来，用词更花哨，也更容易出现别扭搭配、错别字与突兀的书面语。' },
+  ],
+}
+
+const GUIDE_TOP_K: ParamGuide = {
+  min: 0, max: 200, step: 1,
+  bands: [
+    { from: 0, to: 0, name: '关闭', effect: '不做这一步筛选，候选完全交给温度和核采样决定 —— 范围最宽，也最难预料。' },
+    { from: 1, to: 20, name: '极窄', effect: '候选极少，回复高度稳定、词汇贫乏；一旦要写长段落，很快就开始复读。' },
+    { from: 20, to: 60, name: '平衡', effect: '主流区间：压住离谱用词，同时留够表达空间，中文角色扮演通常够用。', recommended: true },
+    { from: 60, to: 120, name: '放开', effect: '允许更少见的词，文风更活；本地小模型容易因此跑出病句与生造词。' },
+    { from: 120, to: 200, name: '几乎不限', effect: '等价于关掉 topK，却比「关」更难预料 —— 因为下限仍然挂着、上限失去了约束。' },
+  ],
+}
+
+const GUIDE_REPEAT_PENALTY: ParamGuide = {
+  min: 0.5, max: 2, step: 0.01,
+  bands: [
+    { from: 0.5, to: 1, name: '鼓励重复', effect: '低于 1 等于「奖励」重复用词 —— 口头禅、整句复读都会明显变多。只有想强化「这个人就爱说这句」时才用。' },
+    { from: 1, to: 1.1, name: '极轻', effect: '1 等于不惩罚；1.05 左右只轻微压住复读，几乎不影响正常表达。', recommended: true },
+    { from: 1.1, to: 1.35, name: '明显', effect: '复读显著减少，但模型开始刻意换词 —— 同一个东西换着法儿叫（烟 / 香烟 / 烟卷），偶尔换得别扭。' },
+    { from: 1.35, to: 1.7, name: '过强', effect: '连「的、了、他」这类高频虚词都会被回避，句子变生硬、绕口，甚至不成句。' },
+    { from: 1.7, to: 2, name: '破坏性', effect: '输出质量断崖式下降（用词错乱、语法崩坏）。除非在做对照实验，不要进这一段。' },
+  ],
+}
+
+const GUIDE_PRESENCE_PENALTY: ParamGuide = {
+  min: -2, max: 2, step: 0.05,
+  bands: [
+    { from: -2, to: -1, name: '死守老话题', effect: '强烈倾向重复出现过的话题与用词 —— 对话明显绕圈，角色会反复问同一件事。' },
+    { from: -1, to: -0.3, name: '黏着当前', effect: '愿意顺着现有话题往深里挖，很少主动开新线索。适合要把一件事聊透。' },
+    { from: -0.3, to: 0.3, name: '无影响', effect: '既不追新也不守旧，有没有新话题完全交给温度和上下文决定。' },
+    { from: 0.3, to: 0.8, name: '愿意开新话题', effect: '会主动带出新细节、新物件、新人物 —— 日常陪伴靠它才有「日子在往前走」的感觉。', recommended: true },
+    { from: 0.8, to: 2, name: '频繁跳话题', effect: '一段里塞进好几个新话题，容易丢掉上一句的线索，长对话显得跳跃、接不上。' },
+  ],
+}
+
+/**
+ * 重复惩罚的**射程**（回看多少个词元）。
+ *
+ * 【为什么单独有这一项 —— 2026-09-16 对照实验的直接产物】
+ * `repeat_penalty` / `frequency_penalty` / `presence_penalty` 三者**共用同一个回看窗口**
+ * （llama.cpp 的 `penalty_last_n`），而 Ollama 出厂只给 **64 词元 ≈ 50 个汉字**（半句话）。
+ * 也就是说「隔了一轮又说同一句话」在物理上就不在惩罚范围内 ——
+ * 把「重复惩罚」从 1.05 调到 1.4 也碰不到它，只会误伤窗口内的虚词（句子发硬、甚至把（ ）括号压没）。
+ * 想治跨轮复读，得先把射程拉开，「词频惩罚」才有用武之地。
+ * 实测：只把射程拉大而不开「词频惩罚」，手部描写占比纹丝不动（28.9% → 27.7%）。
+ */
+export const GUIDE_REPEAT_LAST_N: ParamGuide = {
+  min: 0, max: 4096, step: 64, unit: '词元',
+  bands: [
+    { from: 0, to: 0, name: '关闭', effect: '完全不回看：模型可以逐字复读上一句，重复惩罚与词频惩罚一并失效。' },
+    { from: 64, to: 256, name: '半句到一句', effect: 'Ollama 出厂就是 64 —— 只看得到半句话：句内的重复压得住，隔一轮的复读完全够不到。' },
+    { from: 256, to: 1024, name: '最近两三回合', effect: '射程覆盖最近两三个回合，词频惩罚在这里才真正碰得到「上一轮用过的那类词」—— 跨轮复读靠它。', recommended: true },
+    { from: 1024, to: 4096, name: '整段上下文', effect: '回看范围过大：整份常用词表都被压住，输出普遍变呆、用词趋同，动作描写会明显缩水。' },
+  ],
+}
+
+/**
+ * 词频惩罚：按「同一个词在这一段里出现过几次」扣分。
+ *
+ * 与「重复惩罚」的分工：重复惩罚是**乘性**的（出现过就压一下），管的是「本句别复读」；
+ * 词频惩罚是**按次数累加**的，管的是「同一个词反复出现」—— 也就是本品最典型的
+ * 「每一轮都用一个手部小动作」这种症状。实测打开它（0.1）能把跨轮同拍复现率从 7.7% 压到 0%。
+ * ⚠️ 它必须配合「惩罚射程」才有跨轮效果：射程还在 64 时，它同样够不到上一轮。
+ */
+export const GUIDE_FREQUENCY_PENALTY: ParamGuide = {
+  min: 0, max: 2, step: 0.05,
+  bands: [
+    { from: 0, to: 0, name: '关闭', effect: '不按词频扣分：同一个词用几次都不受罚，模型会翻来覆去用同一个动作词。' },
+    { from: 0.05, to: 0.3, name: '轻推', effect: '同一个词每出现一次就轻微扣一点：够把「反复同一个动作词」压下去，句子又不会变硬。', recommended: true },
+    { from: 0.3, to: 0.7, name: '明显', effect: '复读明显减少，代价是描写长度缩水 —— 模型宁可不写动作，也不愿重复用词。' },
+    { from: 0.7, to: 2, name: '过度', effect: '常用词被大面积回避：句子生硬、寡淡，动作与神态描写会被整层挤掉。' },
+  ],
+}
+
+const GUIDE_SETTING_RATIO: ParamGuide = {
+  min: 10, max: 95, step: 5, unit: '%',
+  bands: [
+    { from: 10, to: 35, name: '历史优先', effect: '设定被大幅压缩，项目资料只能带进一小部分 —— 角色容易「忘设定」（性格、口癖、关系都可能走样）。' },
+    { from: 35, to: 55, name: '偏历史', effect: '设定只保留最核心的部分。适合设定不重、但对话很长的场景。' },
+    { from: 55, to: 70, name: '常规', effect: '设定与历史大致平衡：世界够清楚，也记得住前面聊过什么。', recommended: true },
+    { from: 70, to: 85, name: '偏设定', effect: '项目资料完整带上，代价是对话能记住的轮次明显变少。' },
+    { from: 85, to: 95, name: '设定优先', effect: '几乎全给设定，只适合「先让模型读懂世界、再开始聊」的开局，聊久了会失忆。' },
+  ],
+}
+
+const GUIDE_CONTEXT_BUDGET: ParamGuide = {
+  min: 1000, max: 2097152, step: 500, unit: '字',
+  bands: [
+    { from: 1000, to: 4000, name: '极小', effect: '只记得住最近几轮；协议 + 角色卡 + 背景设定本身就吃掉大半，角色会反复问已经答过的事。' },
+    { from: 4000, to: 10000, name: '单场戏', effect: '短对话够用。但剧情推演的 system 常有 8000~10000 字，这一档几乎全被 system 占满 → 留给对话历史的额度接近 0。' },
+    { from: 10000, to: 24000, name: '长线（默认 24000）', effect: 'system 与对话历史都够用，是「一场完整推演 + 记得住前文」的推荐区间。', recommended: true },
+    { from: 24000, to: 100000, name: '超长', effect: '必须同时把「上下文窗口长度」调大，否则会被模型端截断；本地模型从这里开始明显变慢、显存吃紧。' },
+    { from: 100000, to: 2097152, name: '超大窗口配套', effect: '配合 128K 以上的窗口才用得到；按出厂配比，256K 窗口对应约 19 万字。⚠️ 预算超过「窗口 × 0.732」会被模型端静默截断（先裁协议与设定），控制面板会提示回落。' },
+  ],
+}
+
+const GUIDE_FIXED_OVERHEAD: ParamGuide = {
+  min: 0, max: 20000, step: 100, unit: '字',
+  // 2026-09-14 语义变更：协议与记忆已经算在 system 里，不再重复预留，这一项降到纯余量。
+  bands: [
+    { from: 0, to: 200, name: '几乎不留', effect: '额度贴近真实可用值；模型端若比我们估的多吃一点，长对话里容易突然报超长。' },
+    { from: 200, to: 1000, name: '常规余量（默认 400）', effect: '只当纯余量：覆盖各层标题与少量未计入 system 的内容。协议与记忆已算在 system 里，不再重复预留。', recommended: true },
+    { from: 1000, to: 4000, name: '偏保守', effect: '每轮白扣一千字以上，可用的对话历史被无谓压缩。' },
+    { from: 4000, to: 20000, name: '过大', effect: '历史额度被砍掉一大截 —— 长推演会「忽然失忆」，而且很难联想到是这个数造成的。' },
+  ],
+}
+
+const GUIDE_TIMEOUT: ParamGuide = {
+  min: 10, max: 900, step: 10, unit: '秒',
+  bands: [
+    { from: 10, to: 30, name: '只够快模型', effect: '云端小模型勉强可用；本地模型几乎必然中途超时，表现为「每次都报错」。' },
+    { from: 30, to: 120, name: '联网惯用', effect: '云端模型的常规区间，一般不碰这条线。' },
+    { from: 120, to: 300, name: '本地模型', effect: '本地 7B~32B 的首字延迟常超过 10 秒，加上生成本身的时间需要这个量级。', recommended: true },
+    { from: 300, to: 900, name: '很慢的模型', effect: '只有跑 70B 以上或 CPU 推理才需要；设太大时「真卡住」会变成「等很久」，出问题不容易察觉。' },
+  ],
+}
+
+const GUIDE_NUM_CTX: ParamGuide = {
+  min: 2048, max: 2097152, step: 1024, unit: '词元',
+  // 🔴 2026-10-04（2.8.0）老大定案：**档位不再按显存分级**。
+  //    这里默认就取「模型配置 → 上下文窗口」里填的那个值，讲显存只会让人不敢填真实值。
+  //    ⚠️ 唯一保留的风险提示放在最上一段（真会加载失败），其余各段只说「装得下多少内容」。
+  bands: [
+    { from: 2048, to: 8192, name: '很小', effect: '只装得下几千字的中文内容：长一点的对话历史会被直接挤出去。' },
+    { from: 8192, to: 32768, name: '常规', effect: '本地模型的常见档位，也是本项目的出厂值（32768）；中文约两万字出头。', recommended: true },
+    { from: 32768, to: 131072, name: '大窗口', effect: '能一口气装下整场推演外加较完整的项目设定；占用随它近似线性增长。' },
+    { from: 131072, to: 524288, name: '超大窗口', effect: '长文本模型与量化模型跑得动的量级；设得太高会加载失败，按实测上限填。' },
+    { from: 524288, to: 2097152, name: '极端窗口', effect: '超过模型能承载的量，Ollama 会直接加载失败或把内容静默截断（先裁协议与设定）—— 只填你自己实测跑得动的值。' },
+  ],
+}
+
+// 🔴 2026-10-04（2.8.0）：三项记忆上限的静态上界**跟着预算一起放宽**（与 TUNING_LIMITS 同源，
+//    单测逐项比对）。旧上界（1 万 / 2 万 / 2000）是按本地 32K 定的，1M 云端窗口下会把
+//    按比例算出的记忆（6.8 万）硬夹回 2 万 —— 窗口越大、记忆反而越不匹配。
+//    上界只作兜底，界面上的真实刻度由 `dynamicGuide()` 按当前模型的推荐值生成。
+const GUIDE_SOFT_LIMIT: ParamGuide = {
+  min: 200, max: 200000, step: 100, unit: '字',
+  bands: [
+    { from: 200, to: 800, name: '很紧', effect: '会频繁提醒超限、逼你去压缩，细小情节基本存不住。' },
+    { from: 800, to: 2000, name: '常规', effect: '够放下六栏的要点，也不会和对话历史抢太多上下文。', recommended: true },
+    { from: 2000, to: 5000, name: '宽松', effect: '细节更全，代价是每轮都多占上下文 —— 它和「上下文预算」是此消彼长的。' },
+    { from: 5000, to: 200000, name: '很大', effect: '单是记忆就能吃掉大半上下文预算，模型会被设定挤满、顾不上对话历史。（上界只作兜底，界面上的真实刻度按当前模型的推荐值动态生成）' },
+  ],
+}
+
+const GUIDE_HARD_LIMIT: ParamGuide = {
+  min: 200, max: 400000, step: 100, unit: '字',
+  bands: [
+    { from: 200, to: 1200, name: '很紧', effect: '超过就压缩，日记与关系状态会被频繁砍短，长期看记忆会「越来越只剩骨架」。' },
+    { from: 1200, to: 3000, name: '常规', effect: '在软上限之上留了一倍余量，够撑到下次整理。', recommended: true },
+    { from: 3000, to: 8000, name: '宽松', effect: '长线陪伴（连着几个月）才需要；日常对话到这个量级说明该清一清了。' },
+    { from: 8000, to: 400000, name: '很大', effect: '单是记忆就接近或超过上下文预算，模型忙着记设定、记不住刚说过的话。（上界只作兜底，真实刻度按当前模型的推荐值动态生成）' },
+  ],
+}
+
+const GUIDE_LONGTERM_LIMIT: ParamGuide = {
+  min: 100, max: 40000, step: 50, unit: '字',
+  bands: [
+    { from: 100, to: 200, name: '极简', effect: '长期摘要只剩几句话，久远的事容易被压没，角色会「忘了你们怎么认识的」。' },
+    { from: 200, to: 500, name: '常规', effect: '能留住一个「她记得的过去」的轮廓，也留得住压缩空间。', recommended: true },
+    { from: 500, to: 1200, name: '详细', effect: '久远经历更完整；但它是超限时「最先」被砍的一栏，写太长意义有限。' },
+    { from: 1200, to: 40000, name: '偏大', effect: '会明显挤占「关键事实」「未爆的雷」这两栏的空间 —— 那两栏才是不能丢的。（上界只作兜底，真实刻度按当前模型的推荐值动态生成）' },
+  ],
+}
+
+const GUIDE_DIARY_KEEP: ParamGuide = {
+  min: 1, max: 30, step: 1, unit: '条',
+  bands: [
+    { from: 1, to: 3, name: '只留最近', effect: '两三天前的日记就滚掉了，往前翻会发现「断档」。' },
+    { from: 3, to: 8, name: '常规', effect: '一周左右的生活痕迹都在，够角色回忆「前两天」。', recommended: true },
+    { from: 8, to: 20, name: '留得久', effect: '半个月到三周；占用随条数线性增长，每一条都是一小段文字。' },
+    { from: 20, to: 30, name: '很多', effect: '几乎等于又存了一份近期剧情，会和「最近对话」重复占额度。' },
+  ],
+}
+
+const GUIDE_SUMMARY_LOCK: ParamGuide = {
+  min: 1, max: 1440, step: 10, unit: '分钟',
+  bands: [
+    { from: 1, to: 10, name: '太短', effect: '一次整理还没跑完锁就过期，另一个窗口可能抢走它 —— 两份结果互相覆盖。' },
+    { from: 10, to: 60, name: '常规', effect: '够一次总结跑完（含慢的本地模型），崩了也能及时被接管。', recommended: true },
+    { from: 60, to: 180, name: '偏长', effect: '上次整理中断后，要等一两个小时才能被重新接管。' },
+    { from: 180, to: 1440, name: '很长', effect: '一旦中断，半天内都很难再整理 —— 只能靠重启软件。' },
+  ],
+}
+
+const GUIDE_DAILY_ADVANCE: ParamGuide = {
+  min: 1, max: 168, step: 1, unit: '小时',
+  bands: [
+    { from: 1, to: 4, name: '很勤', effect: '隔一两个小时就补一段「这几天的生活」，日常会被流水账填满、缺少「过了一阵子」的分量。' },
+    { from: 4, to: 12, name: '常规', effect: '一天一两次，角色对「时间过去了」有感觉，也不至于刷屏。', recommended: true },
+    { from: 12, to: 48, name: '说得上话', effect: '隔半天以上才补，每次都更像「这段时间过去了」，但要隔夜才看得到变化。' },
+    { from: 48, to: 168, name: '久别', effect: '一周才推进一次，日常这条线基本只在大跳跃时出现。' },
+  ],
+}
+
+const GUIDE_DAILY_KEEP: ParamGuide = {
+  min: 1, max: 30, step: 1, unit: '条',
+  bands: [
+    { from: 1, to: 3, name: '只留最近', effect: '往前翻两天就没了，日常看起来只有零碎的两笔。' },
+    { from: 3, to: 8, name: '常规', effect: '一周内的生活痕迹都在，和「日记保留」的体量相当。', recommended: true },
+    { from: 8, to: 20, name: '留得久', effect: '占用随条数增长，每条都是一小段文字，会和记忆抢上下文。' },
+    { from: 20, to: 30, name: '很多', effect: '和「日记保留」功能重叠，注意别让两处重复占额度。' },
+  ],
+}
+
+/**
+ * 控制面板数值项的取值表（key 是「面板上的位置」，不是设置里的字段名）。
+ *
+ * 采样五项刻意共用同一份 —— 剧情与自由的**语义完全一样**，
+ * 差别只在各自那条 hint 里的取值建议，不该因此写两份会漂移的表。
+ */
+/** 本场数值：多久请求一次增量 */
+/** 本场数值：单次允许的最大变化幅度（给模型的刹车） */
+const GUIDE_VAR_MAX_STEP: ParamGuide = {
+  min: 1, max: 30, step: 1, unit: '点',
+  bands: [
+    { from: 1, to: 3, name: '很保守', effect: '推进极慢：−100~+100 的刻度上要走很久才有感觉，适合"关系本来就稳"的长线陪伴。' },
+    { from: 3, to: 8, name: '±5', effect: '一次小事件动 2–5 点，十几轮下来能看到明显位移 —— 变化跟得上剧情又不跳戏。', recommended: true },
+    { from: 8, to: 15, name: '剧烈', effect: '一次大事件的量级；模型容易每次都判成「大事件」，数值几次整理就撞顶。' },
+    { from: 15, to: 30, name: '近乎放开', effect: '基本等于不限制，数值会很快撞到 −100 / +100 的端点，之后再也不动 —— 还不如关掉这项。' },
+  ],
+}
+
+/** 联网检索：每次取几条结果喂给模型 */
+const GUIDE_SEARCH_TOP_K: ParamGuide = {
+  min: 1, max: 10, step: 1, unit: '条',
+  bands: [
+    { from: 1, to: 2, name: '1–2 条', effect: '只够确认「有没有这个东西」；信息面窄，模型仍要大量依赖自己的记忆。' },
+    { from: 2, to: 6, name: '2–6 条', effect: '够看清一个题材的轮廓（人物设定 / 故事梗概 / 关键设定），也不会把上下文挤满。', recommended: true },
+    { from: 6, to: 10, name: '6–10 条', effect: '细节更全（尤其冷门题材），但摘要里的重复与噪音也更多，起草时更容易被带偏。' },
+  ],
+}
+
+export const PARAM_GUIDES = {
+  // 通用设置
+  contextBudget: GUIDE_CONTEXT_BUDGET,
+  fixedOverheadChars: GUIDE_FIXED_OVERHEAD,
+  timeoutSec: GUIDE_TIMEOUT,
+  numCtx: GUIDE_NUM_CTX,
+  // 剧情推演
+  plotSettingRatio: GUIDE_SETTING_RATIO,
+  // 自由对话（记忆与日常）
+  softLimit: GUIDE_SOFT_LIMIT,
+  hardLimit: GUIDE_HARD_LIMIT,
+  longTermLimit: GUIDE_LONGTERM_LIMIT,
+  diaryKeep: GUIDE_DIARY_KEEP,
+  summaryLock: GUIDE_SUMMARY_LOCK,
+  dailyAdvance: GUIDE_DAILY_ADVANCE,
+  dailyKeep: GUIDE_DAILY_KEEP,
+  // 本场数值（C2 第二步）
+  varMaxStep: GUIDE_VAR_MAX_STEP,
+  // 联网检索
+  searchTopK: GUIDE_SEARCH_TOP_K,
+} as const
+
+/** 两个模式共用的采样参数（语义一致，故只有一份） */
+export const GUIDE_SAMPLING = {
+  temperature: GUIDE_TEMPERATURE,
+  topP: GUIDE_TOP_P,
+  topK: GUIDE_TOP_K,
+  repeatPenalty: GUIDE_REPEAT_PENALTY,
+  frequencyPenalty: GUIDE_FREQUENCY_PENALTY,
+  repeatLastN: GUIDE_REPEAT_LAST_N,
+  presencePenalty: GUIDE_PRESENCE_PENALTY,
+} as const
+
+/** 找出某个值落在哪一段。找不到（越界）时返回最后一段，调用方不必先夹取 */
+export function bandOf(g: ParamGuide, v: number): ParamBand {
+  return g.bands.find(b => v <= b.to) ?? g.bands[g.bands.length - 1]!
+}
+
+// ============================================================
+// 动态五档（2.8.0）：档位围绕「当前模型的推荐值」生成
+// ============================================================
+//
+// 【为什么不再用固定档位】出厂那几档是按本地 32K 窗口定的。接上 128K / 256K / 1M 的模型后，
+// 推荐值早就跑到最后一档去了，界面却仍在高亮「超长 / 超大窗口配套」—— 作者看到的永远是
+// 「我怎么又拉过头了」。改成跟着推荐值走：换模型，整条刻度一起平移，推荐档永远在中间。
+//
+// 【口径】以推荐值 r 为中心，上下各两档，切点取档位之间的中点（0.625 / 0.875 / 1.25 / 1.75），
+// 于是「推荐值 ±25%」都还算推荐档 —— 手调一点点不会立刻跳档，手感更稳。
+
+/** 能按当前模型动态生成档位的项（都是字数 / 条数类；采样类语义与窗口无关，不在此列） */
+const DYNAMIC_GUIDE_KEYS = [
+  'contextBudget', 'numCtx', 'fixedOverheadChars', 'softLimit', 'hardLimit', 'longTermLimit', 'diaryKeep',
+] as const
+export type DynamicGuideKey = (typeof DYNAMIC_GUIDE_KEYS)[number]
+
+/** 五档切点（相对推荐值的倍数） */
+const DYNAMIC_EDGES = [0.625, 0.875, 1.25, 1.75] as const
+
+type BandText = { name: string; effect: string }
+
+/**
+ * 五档文案：一律**按推荐值插值**，禁写字面量（审计纪律 —— 写死数字迟早与实际换算漂移）。
+ * `lo` / `hi` 是推荐段的真实上下界，文案里直接念它，作者看到的数字就是当前值会落进去的范围。
+ */
+const DYNAMIC_TEXTS: Record<DynamicGuideKey, (r: number, lo: number, hi: number) => BandText[]> = {
+  contextBudget: (r, lo, hi) => [
+    { name: '偏小', effect: `约为当前推荐值 ${r} 的一半：设定 + 记忆 + 对话历史挤在一起，聊到十几轮就会开始忘前文。` },
+    { name: '略小', effect: `低于推荐值 ${r}：能带进去的设定变少，角色容易忘了自己是谁、忘了刚聊过什么。` },
+    { name: '推荐', effect: `${lo} ~ ${hi}：按当前模型的上下文窗口折减得出，设定与对话历史都够用。` },
+    { name: '略大', effect: `高于推荐值 ${r}：设定带得更全，代价是每轮更慢、云端按量计费时更贵。` },
+    { name: '偏大', effect: `${hi} 以上：接近窗口承载上限 —— 本地模型会明显变慢、显存吃紧，超出承载量会被静默截断（先裁协议与设定）。` },
+  ],
+  numCtx: (r, lo, hi) => [
+    { name: '偏小', effect: `远低于模型配置里填的窗口：模型能装的内容被主动砍掉大半，长对话会早早被截断。` },
+    { name: '略小', effect: `低于模型配置窗口（${r}）：跑得更稳，但没用满模型能力 —— 空着的窗口并不会换来速度。` },
+    { name: '推荐', effect: `${lo} ~ ${hi}：与「模型配置 → 上下文窗口」里填的值一致，默认就取那里。` },
+    { name: '略大', effect: `高于模型配置窗口（${r}）：本地模型按这个数分配显存，超过能承载的量会直接加载失败。` },
+    { name: '偏大', effect: `${hi} 以上：显存占用近似随它线性增长，最常见的后果是模型加载不起来。` },
+  ],
+  fixedOverheadChars: (r, lo, hi) => [
+    { name: '偏小', effect: `几乎不留余量：模型端若比我们估的多吃一点，长对话里容易突然报超长。` },
+    { name: '略小', effect: `低于按当前预算推算的余量（${r}）：多数时候够用，长推演末尾可能顶到边界。` },
+    { name: '推荐', effect: `${lo} ~ ${hi}：按当前预算的约百分之一推算，够覆盖各层标题与少量未计入的内容。` },
+    { name: '略大', effect: `高于推算值 ${r}：每轮白扣一部分额度，可用的对话历史被无谓压缩。` },
+    { name: '偏大', effect: `${hi} 以上：历史额度被砍掉一大截 —— 长推演会「忽然失忆」，而且很难联想到是这个数造成的。` },
+  ],
+  softLimit: (r, lo, hi) => [
+    { name: '偏小', effect: `频繁提醒超限、逼你去压缩，细小情节基本存不住。` },
+    { name: '略小', effect: `低于推荐值 ${r}：要点记得住、细节会丢；对话一长就开始滚掉早期内容。` },
+    { name: '推荐', effect: `${lo} ~ ${hi}：按当前上下文预算同比推算，够放下六栏要点，也不和对话历史抢太多。` },
+    { name: '略大', effect: `高于推荐值 ${r}：细节更全，代价是每轮多占上下文 —— 它与「上下文预算」是此消彼长的。` },
+    { name: '偏大', effect: `${hi} 以上：单是记忆就吃掉大半预算，模型被设定挤满、顾不上刚说过的话。` },
+  ],
+  hardLimit: (r, lo, hi) => [
+    { name: '偏小', effect: `超过就压缩，日记与关系状态被频繁砍短，长期看记忆只会剩骨架。` },
+    { name: '略小', effect: `低于推荐值 ${r}：余量偏紧，撑不到下次整理就得先压一压。` },
+    { name: '推荐', effect: `${lo} ~ ${hi}：按当前预算同比推算，在软上限之上留了一倍余量，够撑到下次整理。` },
+    { name: '略大', effect: `高于推荐值 ${r}：长线陪伴（连着几个月）才需要这个量级；日常对话到这儿说明该清一清了。` },
+    { name: '偏大', effect: `${hi} 以上：记忆接近或超过整个上下文预算，模型忙着记设定、记不住对话。` },
+  ],
+  longTermLimit: (r, lo, hi) => [
+    { name: '偏小', effect: `长期摘要只剩几句话，久远的事容易被压没，角色会忘了你们怎么认识的。` },
+    { name: '略小', effect: `低于推荐值 ${r}：只留得下一个粗略轮廓，细节一压缩就没了。` },
+    { name: '推荐', effect: `${lo} ~ ${hi}：按记忆硬上限同比推算，留得住「她记得的过去」，也留得住压缩空间。` },
+    { name: '略大', effect: `高于推荐值 ${r}：久远经历更完整；但它是超限时最先被砍的一栏，写太长意义有限。` },
+    { name: '偏大', effect: `${hi} 以上：会明显挤占「关键事实」「未爆的雷」两栏 —— 那两栏才是不能丢的。` },
+  ],
+  diaryKeep: (r, lo, hi) => [
+    { name: '偏小', effect: `两三天前的日记就滚掉了，往前翻会发现断档。` },
+    { name: '略小', effect: `少于推荐值 ${r} 条：只记得住最近几天，角色回忆不起「前两天」做过什么。` },
+    { name: '推荐', effect: `${lo} ~ ${hi} 条：按预算开方缩放（涨得比预算慢），一周左右的生活痕迹都在。` },
+    { name: '略大', effect: `高于推荐值 ${r} 条：半个月到三周；占用随条数线性增长，每一条都是一小段文字。` },
+    { name: '偏大', effect: `${hi} 条以上：几乎等于又存了一份近期剧情，会和「最近对话」重复占额度。` },
+  ],
+}
+
+function snapTo(v: number, step: number): number {
+  return step > 0 ? Math.round(v / step) * step : Math.round(v)
+}
+
+/** 把候选切点整理成「严格递增、落在 (min,max) 内、彼此至少差一个 step」的边界序列 */
+function tidyEdges(cands: number[], min: number, max: number, step: number, keep: (v: number) => boolean): number[] {
+  const out: number[] = []
+  for (const raw of cands) {
+    const v = Math.min(max, Math.max(min, snapTo(raw, step)))
+    if (!keep(v)) continue
+    const lo = out.length ? out[out.length - 1]! + step : min
+    if (v < lo) continue
+    if (out.length && v > max) continue
+    out.push(v)
+  }
+  return out
+}
+
+/**
+ * 以「当前模型的推荐值」为中心生成档位表。
+ *
+ * 🔴 三条不变量（与静态表同一套闸门，由单测锁住）：
+ *   ① 首段 from === min、末段 to === max，段与段首尾相接、无空隙无重叠；
+ *   ② **恰好一个** recommended 段，且**推荐值真的落在这一段里**（否则界面上的「推荐」是假的）；
+ *   ③ min / step 一律沿用静态表 —— 只有上界与分段被重算，输入框手感不变。
+ *
+ * 极窄的取值范围（推荐值贴着 min 或 max）会自动退化成三档 / 四档，不硬凑五档 ——
+ * 硬凑会造出 `from === to` 的空段，反而让「当前值落在哪一段」变得没有意义。
+ */
+export function dynamicGuide(key: DynamicGuideKey, rec: number): ParamGuide {
+  const g = PARAM_GUIDES[key]
+  const r = Math.min(g.max, Math.max(g.min, snapTo(rec, g.step)))
+  const max = Math.max(g.max, snapTo(r * 2.5, g.step))
+
+  const cands = DYNAMIC_EDGES.map(m => r * m)
+  // 下方两档必须**严格小于** r（`bandOf` 用 v <= to，边界值归下面那一段，
+  // 若下界正好等于 r，推荐值就会被判进「略小」档 —— 推荐档形同虚设）
+  const below = tidyEdges(cands, g.min, max, g.step, v => v < r && v > g.min)
+  const above = tidyEdges(cands, g.min, max, g.step, v => v >= r && v < max)
+
+  const bounds = [...below, ...above]
+  const froms = [g.min, ...bounds]
+  const tos = [...bounds, max]
+  const recIdx = below.length
+  const texts = DYNAMIC_TEXTS[key](r, froms[recIdx]!, tos[recIdx]!)
+
+  const bands: ParamBand[] = froms.map((from, i) => {
+    const t = texts[Math.min(i, texts.length - 1)]!
+    return {
+      from,
+      to: Math.max(from, tos[i]!),
+      name: t.name,
+      effect: t.effect,
+      ...(i === recIdx ? { recommended: true } : {}),
+    }
+  })
+
+  return { min: g.min, max, step: g.step, unit: g.unit, bands }
+}

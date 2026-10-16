@@ -89,6 +89,7 @@ function harness(options: HarnessOptions = {}) {
     getSnapshot: () => snapshot,
     subscribe: () => () => {},
     start: async () => {}, refresh: async () => {}, createProject,
+    openProject: async () => true,
     createChapter: async () => true, selectDocument: async () => true,
     edit: () => {}, flush: async () => true, applyExternalUpdate: () => true,
     retrySave: () => {}, resolveConflict: () => {}, toggleExpanded: () => {},

@@ -120,6 +120,7 @@ function makeState(initial: Partial<AppSnapshot> = {}): StateHarness {
     start: async () => {},
     refresh: async () => {},
     createProject: async () => false,
+    openProject: async () => true,
     createChapter: async () => false,
     selectDocument: async () => false,
     edit: () => {},

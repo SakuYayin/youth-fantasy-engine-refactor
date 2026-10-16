@@ -99,6 +99,7 @@ function harness(entities: AppSnapshot['settingsEntities'], options: HarnessOpti
     getSnapshot: () => snapshot,
     subscribe: () => () => {},
     start: async () => {}, refresh: async () => {}, createProject: async () => true,
+    openProject: async () => true,
     createChapter: async () => true, selectDocument: async () => true,
     edit: vi.fn(), flush: async () => true, applyExternalUpdate: () => true,
     retrySave: () => {}, resolveConflict: () => {}, toggleExpanded: () => {},

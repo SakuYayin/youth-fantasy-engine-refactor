@@ -23,6 +23,13 @@ import { countChars } from '@yfe/domain'
 import type {
   AiCompleteInput,
   AiCompleteOutput,
+  BackupCreateInput,
+  BackupCreateOutput,
+  BackupListOutput,
+  BackupRestoreInput,
+  BackupRestoreOutput,
+  BackupVerifyInput,
+  BackupVerifyOutput,
   DocumentCreateInput,
   DocumentCreateOutput,
   DocumentGetInput,
@@ -35,7 +42,13 @@ import type {
   IdempotencyKey,
   ProjectCreateInput,
   ProjectCreateOutput,
+  ProjectDeleteInput,
+  ProjectDeleteOutput,
   ProjectId,
+  ProjectListInput,
+  ProjectListOutput,
+  ProjectUpdateInput,
+  ProjectUpdateOutput,
   RequestId,
   Result,
   Revision,
@@ -189,6 +202,20 @@ export interface RendererClientPort {
   readonly listDocumentTree: (input: DocumentTreeInput) => Promise<Result<DocumentTreeOutput>>
   readonly getDocument: (input: DocumentGetInput) => Promise<Result<DocumentGetOutput>>
   readonly createProject: (input: ProjectCreateInput) => Promise<Result<ProjectCreateOutput>>
+  /** 作品中心：列出本工作区的作品（不含已软删的）。 */
+  readonly listProjects: (input: ProjectListInput) => Promise<Result<ProjectListOutput>>
+  /** 作品中心：改名（CAS 乐观锁，过期 revision 报 `REVISION_CONFLICT`）。 */
+  readonly updateProject: (input: ProjectUpdateInput) => Promise<Result<ProjectUpdateOutput>>
+  /** 作品中心：软删作品行，**不级联**子文档；重复删除报 `NOT_FOUND_PROJECT`。 */
+  readonly deleteProject: (input: ProjectDeleteInput) => Promise<Result<ProjectDeleteOutput>>
+  /** 备份：立刻做一份一致性快照（`VACUUM INTO`，含活动 WAL）。 */
+  readonly backupCreate: (input: BackupCreateInput) => Promise<Result<BackupCreateOutput>>
+  /** 备份：列出备份目录里的快照（无入参）。 */
+  readonly backupList: () => Promise<Result<BackupListOutput>>
+  /** 备份：校验一份快照能否恢复。 */
+  readonly backupVerify: (input: BackupVerifyInput) => Promise<Result<BackupVerifyOutput>>
+  /** 备份：恢复到「恢复预览」目录，**绝不覆盖在用库**。 */
+  readonly backupRestore: (input: BackupRestoreInput) => Promise<Result<BackupRestoreOutput>>
   readonly createDocument: (input: DocumentCreateInput) => Promise<Result<DocumentCreateOutput>>
   readonly saveDraft: (input: SaveDraftInput) => Promise<Result<SaveDraftOutput>>
   readonly listSettingsEntities: (
@@ -226,6 +253,14 @@ export interface AppState {
   start(): Promise<void>
   refresh(): Promise<void>
   createProject(name: string): Promise<boolean>
+  /**
+   * 打开一个已存在的作品；**传 `null` = 关闭当前作品回到空态**（作品中心的「返回」）。
+   *
+   * 与新建作品共用同一条路径：先冲刷当前草稿，再清空上一部的章节树 / 正文 /
+   * 设定实体（它们都属于别的 `projectId`），然后载入新作品的树与首章。
+   * 返回 false = 冲刷失败（此时 `projectId` 绝不切换，免得草稿落到错误的作品下）。
+   */
+  openProject(projectId: string | null): Promise<boolean>
   createChapter(title: string): Promise<boolean>
   selectDocument(documentId: string): Promise<boolean>
   edit(body: string): void
@@ -674,6 +709,44 @@ export function createAppState(deps: AppStateDeps): AppState {
       body = ''
       revision = null
       charCount = 0
+      await loadTree()
+      const target = firstChapter()
+      if (target !== null) await loadDocument(target)
+      emit()
+      return true
+      })
+    },
+
+    /**
+     * 打开作品 / 关闭作品。
+     *
+     * `null` = 关闭当前作品回到空态。切换前先 `flushCurrent()`：草稿必须落在它所属的
+     * 作品里，冲刷失败就**绝不切换**（否则待保存正文会跟到别的作品下）。
+     */
+    async openProject(nextProjectId: string | null): Promise<boolean> {
+      return navigate(async () => {
+      if (!await flushCurrent()) return false
+      if (nextProjectId !== null && nextProjectId === projectId) {
+        // 已经在目标作品里：不重载，免得把用户当前的选中章节与编辑位置冲掉。
+        return true
+      }
+      session?.dispose()
+      session = null
+      projectId = nextProjectId
+      deps.projectStore.write(projectId)
+      documents = []
+      selectedDocumentId = null
+      settingsEntities = []
+      selectedSettingsEntityId = null
+      title = ''
+      body = ''
+      revision = null
+      charCount = 0
+      noteSuccess()
+      if (projectId === null) {
+        emit()
+        return true
+      }
       await loadTree()
       const target = firstChapter()
       if (target !== null) await loadDocument(target)

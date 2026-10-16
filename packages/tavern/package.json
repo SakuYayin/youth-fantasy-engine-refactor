@@ -1,0 +1,26 @@
+{
+  "name": "@yfe/tavern",
+  "version": "4.0.0-dev.0",
+  "private": true,
+  "type": "module",
+  "description": "酒馆模式内核：类型/常量、提示词层序、世界书词条引擎、本场变量、记忆与总结、收尾编排。纯逻辑，零宿主依赖（IO 一律经注入的端口）",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./types": {
+      "types": "./src/types.ts",
+      "default": "./src/types.ts"
+    },
+    "./*": {
+      "types": "./src/*.ts",
+      "default": "./src/*.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  }
+}

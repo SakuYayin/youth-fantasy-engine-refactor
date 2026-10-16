@@ -199,6 +199,16 @@ function makeHarness(initial: Overrides = {}, storedProject: string | null = 'pr
       if (overrides.createProject !== undefined) return overrides.createProject(input)
       return { ok: true, value: { projectId: 'prj_new' as ProjectId, revision: rev('rev_1') } }
     },
+    // 作品中心 / 备份这七条通道不归状态机用例驱动（它们由 ProjectHubStore、BackupPort
+    // 两个独立端口持有，见 features/types.ts 的决策注释）。这里只补齐 RendererClientPort
+    // 的形状，一律返回"没有数据"，避免把无关失败混进本文件的保存与导航断言。
+    listProjects: async () => ({ ok: true, value: { projects: [] } }),
+    updateProject: async () => failure('NOT_FOUND_PROJECT') as never,
+    deleteProject: async () => failure('NOT_FOUND_PROJECT') as never,
+    backupCreate: async () => failure('STORAGE_UNAVAILABLE') as never,
+    backupList: async () => ({ ok: true, value: { backups: [] } }),
+    backupVerify: async () => failure('NOT_FOUND_SNAPSHOT') as never,
+    backupRestore: async () => failure('NOT_FOUND_SNAPSHOT') as never,
     createDocument: async (input) => {
       documentInputs.push(input)
       if (overrides.createDocument !== undefined) return overrides.createDocument(input)

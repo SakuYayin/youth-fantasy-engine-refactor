@@ -171,6 +171,7 @@ function harness(entities: AppSnapshot['settingsEntities'], options: HarnessOpti
     start: async () => {},
     refresh: async () => {},
     createProject: async () => true,
+    openProject: async () => true,
     createChapter: async () => true,
     selectDocument: async () => true,
     edit: vi.fn(),

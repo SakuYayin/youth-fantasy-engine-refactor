@@ -153,6 +153,7 @@ function stateHarness(ai: AiPort, snapshot: AppSnapshot = snapshotFixture()): St
     start: () => Promise.resolve(),
     refresh: () => Promise.resolve(),
     createProject: () => Promise.resolve(true),
+    openProject: async () => true,
     createChapter: () => Promise.resolve(true),
     selectDocument: () => Promise.resolve(true),
     edit: () => undefined,

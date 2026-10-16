@@ -17,6 +17,10 @@ import { createApp } from 'vue'
 
 import App from './App.vue'
 import { createAppState, type ProjectStorePort } from './app-state.js'
+import { createDemoProject } from './features/demo-project-port.js'
+import { createFeaturePorts } from './features/ports.js'
+import type { SettingsStorage } from './features/settings-store.js'
+import { LOCAL_WORKSPACE_ID } from '../shared/local-workspace.js'
 
 const PROJECT_KEY = 'yfe.currentProjectId'
 
@@ -56,14 +60,61 @@ function bridgeTransport(): ClientTransport {
   }
 }
 
+const client = createClient(bridgeTransport())
+
 const state = createAppState({
-  client: createClient(bridgeTransport()),
+  client,
   projectStore,
   newRequestId: () => crypto.randomUUID(),
   newSessionId: () => `ui_${crypto.randomUUID()}`,
 })
 
-const app = createApp(App, { state })
+/**
+ * 设置存储：与作品记忆共用 localStorage。
+ *
+ * 与 `projectStore` 同样包 try/catch —— `file://` 源在隐私模式/配额异常时
+ * 一读就抛 `SecurityError`，绝不能因此让界面起不来。
+ */
+const settingsStorage: SettingsStorage = {
+  getItem(key: string): string | null {
+    try {
+      return window.localStorage.getItem(key)
+    } catch {
+      return null
+    }
+  },
+  setItem(key: string, value: string): void {
+    try {
+      window.localStorage.setItem(key, value)
+    } catch {
+      // 存不下就算了：本会话内设置仍生效（面板拿的是返回值），只是下次启动会回默认。
+    }
+  },
+  removeItem(key: string): void {
+    try {
+      window.localStorage.removeItem(key)
+    } catch {
+      // 同上。
+    }
+  },
+}
+
+const ports = createFeaturePorts({
+  state,
+  invoke: client,
+  storage: settingsStorage,
+  newRequestId: () => crypto.randomUUID(),
+  windowWidth: () => window.innerWidth,
+  // 示范项目《吞天神脉》：45 次串行 IPC（1 作品 + 2 卷 + 21 章 + 21 正文），
+  // 由向导的忙碌态兜住延迟。`client` 结构上同时满足 `DemoProjectInvoke`。
+  createDemoProject: createDemoProject({
+    invoke: client,
+    workspaceId: LOCAL_WORKSPACE_ID,
+    newRequestId: () => crypto.randomUUID(),
+  }),
+})
+
+const app = createApp(App, { state, ports })
 app.mount('#app')
 
 // main 等待明确的保存结果，超时/失败由宿主提示继续编辑或放弃退出。

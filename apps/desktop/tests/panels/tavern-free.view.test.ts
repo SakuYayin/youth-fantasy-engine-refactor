@@ -124,6 +124,7 @@ function makeHarness(options: HarnessOptions = {}) {
     start: async () => undefined,
     refresh: async () => undefined,
     createProject: async () => undefined,
+    openProject: async () => true,
     createChapter: async () => undefined,
     selectDocument: () => undefined,
     edit: () => undefined,

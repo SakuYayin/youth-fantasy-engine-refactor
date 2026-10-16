@@ -15,6 +15,16 @@ import type { VisCtx } from '@yfe/schema-tabs'
 import { YfeButton, YfeDialog, YfePanel, YfeStatusPill, YfeToolbar, YfeTree } from '@yfe/ui'
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 
+import type { AppSettingsView, FeaturePorts } from './features/types.js'
+import { clampSidebarWidth, SIDEBAR_WIDTH } from './features/settings-store.js'
+import { CUSTOM_THEME_ID, type ThemeOption } from './features/settings-panel-model.js'
+import BackupManager from './features/backup-manager.vue'
+import ProjectHub from './features/project-hub.vue'
+import SettingsPanel from './features/settings-panel.vue'
+import WelcomeWizard from './features/welcome-wizard.vue'
+import { applyThemeAttribute, applyThemeVariables, isConcreteThemeId, themeCssVariablesById, type ThemeHost } from './theme/variables.js'
+import { DEFAULT_THEME_ID, THEME_PALETTES } from './theme/palettes.js'
+import { applyZoom, type ZoomHost } from './theme/zoom.js'
 import type { AppSnapshot, AppState } from './app-state.js'
 import { createCodeMirrorAdapter, type CodeMirrorAdapter } from './editor/codemirror-adapter.js'
 import type { EntityRow } from './schema/entity-row.js'
@@ -30,11 +40,105 @@ import {
   sidebarGroups,
 } from './schema/index.js'
 
-const props = defineProps<{ state: AppState }>()
+/**
+ * `ports` 可选：缺省时不渲染作品中心/备份/设置/向导四个外壳功能，
+ * 只保留写作页 —— 既有的组件测试夹具（15 个面板 + app-view）全部不用改。
+ */
+const props = defineProps<{ state: AppState; ports?: FeaturePorts }>()
 
 const snapshot = shallowRef<AppSnapshot>(props.state.getSnapshot())
 const editorHost = ref<HTMLElement | null>(null)
 const newProjectName = ref('')
+
+/**
+ * 外壳当前显示哪一屏。
+ *
+ * - `editor`：章节树 + 正文/设定页签（主界面）
+ * - `hub`/`backups`/`settings`：从顶栏进入的全屏功能屏
+ * - `welcome`：仅首启显示的三选一向导
+ */
+type ShellView = 'editor' | 'hub' | 'backups' | 'settings' | 'welcome'
+const view = ref<ShellView>('editor')
+
+/** 设置视图：主题/缩放/字体/侧栏宽度的唯一真相源（由 `settings` 端口读写）。 */
+const settings = shallowRef<AppSettingsView | null>(null)
+
+/** 主题单选选项：从主题表生成，末尾追加禁用的「自定义」（旧版有、本版未实现，见 R-80）。 */
+const themeOptions = computed<readonly ThemeOption[]>(() => [
+  ...THEME_PALETTES.map((palette) => ({
+    id: palette.id,
+    name: palette.name,
+    desc: palette.desc,
+    swatch: palette.swatch,
+  })),
+  { id: CUSTOM_THEME_ID, name: '自定义', desc: '母版派生 · 可调色', swatch: 'conic-gradient(#e88, #8c8)' },
+])
+
+/** 侧栏宽度由设置驱动；未加载设置时用设计缺省值。 */
+const sidebarWidth = computed(() => clampSidebarWidth(settings.value?.sidebarWidth ?? SIDEBAR_WIDTH.initial))
+
+/**
+ * 已写到根节点的主题变量名。
+ *
+ * `applyThemeVariables` 需要"上一次写了哪些变量"才能在换肤时清掉不再存在的键
+ * （否则上一套主题的 `--yfe-ink-*` 会残留，浅色主题会读出深色描边）。
+ */
+let appliedThemeVariables: readonly string[] = []
+
+/**
+ * 把一套设置落到根节点上。
+ *
+ * 三件事必须一起做，缺一样界面就会"看起来没生效"：
+ * 1. 写 `--yfe-*` 变量（含 19 条旧别名 —— 本文件 126 行 scoped 样式仍在用旧名）；
+ * 2. 写 `dataset.theme`（给将来按主题分支的样式留钩子，也是旧版的既有约定）；
+ * 3. 写 `style.zoom` + `--ui-zoom`（缩放不能用 `font-size` 代替，中文字号会跳级）。
+ */
+function applySettings(next: AppSettingsView): void {
+  settings.value = next
+  const root = document.documentElement as unknown as ThemeHost & ZoomHost
+  appliedThemeVariables = applyThemeVariables(
+    root,
+    themeCssVariablesById(next.themeId),
+    appliedThemeVariables,
+  )
+  if (isConcreteThemeId(next.themeId)) applyThemeAttribute(root, next.themeId)
+  applyZoom(root, next.zoomPercent)
+}
+
+/**
+ * 正文/界面字体：**没有独立 CSS 文件可改**（渲染层只有 `index.html` 里那行内联样式，
+ * CSP 是 `style-src 'self' 'unsafe-inline'`，不允许外链样式表），所以字体只能
+ * 靠根节点变量 + 编辑器容器内联样式驱动。
+ */
+const editorStyle = computed(() => {
+  const current = settings.value
+  if (current === null) return {}
+  const family = current.fontFamily
+  return {
+    fontFamily: family === null ? undefined : family,
+    fontSize: current.fontSize,
+  }
+})
+
+/** 向导是否显示：只在「端口可用 + 用户没说过不再显示」时进 welcome 屏。 */
+function decideInitialView(): ShellView {
+  if (props.ports === undefined) return 'editor'
+  try {
+    return props.ports.welcome.seen() ? 'editor' : 'welcome'
+  } catch {
+    // 端口理论上不抛（§0.2），真抛了不能白屏：直接进主界面。
+    return 'editor'
+  }
+}
+
+function loadSettings(): void {
+  if (props.ports === undefined) return
+  try {
+    applySettings(props.ports.settings.load())
+  } catch {
+    // 读设置失败不拦开工：界面用样式里的字面量兜底色。
+  }
+}
 
 /**
  * 可见性上下文：预览版先按**完整模板**渲染（`type:'full'` 时 `tabVisible` 恒 true，
@@ -102,6 +206,9 @@ function applySnapshotToEditor(): void {
 }
 
 onMounted(async () => {
+  loadSettings()
+  view.value = decideInitialView()
+
   stopState = props.state.subscribe((next) => {
     snapshot.value = next
     applySnapshotToEditor()
@@ -135,6 +242,64 @@ onBeforeUnmount(() => {
   adapter?.dispose()
   adapter = null
 })
+
+/* ------------------------------------------------------------------ *
+ * 外壳导航：作品中心 / 备份恢复 / 设置 / 欢迎向导
+ *
+ * 四个功能屏都是"整屏替换"，不做路由库 —— 预览版只有一屏主界面，
+ * 引 vue-router 换来的只是多一份依赖与一个需要同步的 URL 状态。
+ * ------------------------------------------------------------------ */
+
+function openHub(): void {
+  view.value = 'hub'
+}
+
+function openBackups(): void {
+  view.value = 'backups'
+}
+
+function openSettings(): void {
+  loadSettings()
+  view.value = 'settings'
+}
+
+function backToEditor(): void {
+  view.value = 'editor'
+}
+
+/**
+ * 设置面板每次改动都会 `emit('change', view)`（失败路径也发，见该组件注释），
+ * 所以这里必须**无条件按返回值重放**：面板显示的是它自己那份视图，
+ * 外壳的主题/缩放/字体要跟着走，否则改了字号只有面板知道。
+ */
+function onSettingsChange(next: AppSettingsView): void {
+  applySettings(next)
+}
+
+/**
+ * 向导收尾。
+ *
+ * - `projectId === null`：用户选了「新建作品」或「直接开始」，回写作页空态；
+ *   `WelcomePort.done` 只带回 `projectId`，**没有**「走的是哪条路」字段，端子区分不了
+ *   ① 与 ③，故与上游 `WelcomeWizard.finish(null)` 同款处理，不擅自代用户打开作品中心。
+ * - 有 `projectId`：示范项目已建好，直接打开它（`state.openProject`）。
+ */
+async function onWelcomeDone(payload: { projectId: string | null }): Promise<void> {
+  if (payload.projectId === null) {
+    view.value = 'editor'
+    return
+  }
+  const opened = await props.state.openProject(payload.projectId)
+  view.value = 'editor'
+  if (!opened) notice.value = '示范项目已创建，但打开失败；请到作品中心手动打开。'
+}
+
+/** 作品中心「打开」成功后的收尾：回主界面并重载当前页签数据。 */
+async function onHubOpened(): Promise<void> {
+  view.value = 'editor'
+  await loadActiveTab()
+  applySnapshotToEditor()
+}
 
 async function onCreateProject(): Promise<void> {
   const name = newProjectName.value.trim()
@@ -249,12 +414,28 @@ function onTakeExternal(): void {
       <YfeStatusPill :status="snapshot.saveStatus" :detail="snapshot.saveDetail ?? undefined" />
       <span v-if="snapshot.pendingOutboxCount > 0" class="app__badge">待同步 {{ snapshot.pendingOutboxCount }}</span>
       <span class="app__spacer" />
+      <!-- 外壳导航：只在注入了 ports 时出现（组件测试不传 ports，顶栏保持原样）。 -->
+      <YfeToolbar v-if="ports !== undefined">
+        <YfeButton
+          v-if="view !== 'editor'"
+          label="返回写作"
+          variant="ghost"
+          @click="backToEditor"
+        />
+        <YfeButton label="作品中心" variant="ghost" @click="openHub" />
+        <YfeButton label="备份与恢复" variant="ghost" @click="openBackups" />
+        <YfeButton label="设置" variant="ghost" @click="openSettings" />
+      </YfeToolbar>
       <span class="app__meta">{{ snapshot.appVersion ?? '' }}</span>
       <span v-if="snapshot.readOnly" class="app__meta">只读</span>
     </header>
 
-    <div class="app__body">
-      <aside class="app__side">
+    <!--
+      写作页用 `v-show` 而不是 `v-if`：编辑器宿主一旦卸载，CodeMirror 实例就没了，
+      从设置/作品中心切回来会得到一个空白的正文区（`adapter` 变量还指着旧 DOM）。
+    -->
+    <div v-show="view === 'editor'" class="app__body">
+      <aside class="app__side" :style="{ width: `${sidebarWidth}px` }">
         <TabSidebar
           :groups="tabGroups"
           :active-id="activeTabId"
@@ -291,7 +472,7 @@ function onTakeExternal(): void {
 
       <main class="app__main">
         <!-- 编辑器宿主必须常驻（`v-show` 不卸载）：切到设定页签再切回来时 CodeMirror 实例还在。 -->
-        <div v-show="isEditorTab" ref="editorHost" class="app__editor" />
+        <div v-show="isEditorTab" ref="editorHost" class="app__editor" :style="editorStyle" />
 
         <template v-if="!isEditorTab">
           <div class="app__tabhead">
@@ -355,6 +536,37 @@ function onTakeExternal(): void {
         </footer>
       </main>
     </div>
+
+    <!--
+      四个外壳功能屏用 `v-if`：它们没有需要保住的原生实例（不像 CodeMirror），
+      每次进入都重新挂载反而更干净 —— 备份列表/作品列表是磁盘状态，
+      留着上一次的 DOM 只会显示过期数据。
+    -->
+    <main v-if="ports !== undefined && view === 'hub'" class="app__screen">
+      <ProjectHub
+        :hub="ports.hub"
+        @open="onHubOpened"
+        @backups="openBackups"
+        @close="backToEditor"
+      />
+    </main>
+
+    <main v-else-if="ports !== undefined && view === 'backups'" class="app__screen">
+      <BackupManager :backup="ports.backup" @close="backToEditor" />
+    </main>
+
+    <main v-else-if="ports !== undefined && view === 'settings'" class="app__screen">
+      <SettingsPanel
+        :settings="ports.settings"
+        :themes="themeOptions"
+        @change="onSettingsChange"
+        @close="backToEditor"
+      />
+    </main>
+
+    <main v-else-if="ports !== undefined && view === 'welcome'" class="app__screen">
+      <WelcomeWizard :welcome="ports.welcome" @done="onWelcomeDone" @close="backToEditor" />
+    </main>
 
     <YfeDialog
       :open="conflictOpen"
@@ -459,6 +671,20 @@ function onTakeExternal(): void {
   min-height: 0;
   overflow: auto;
   padding: 8px 12px;
+}
+
+/**
+ * 全屏功能屏（作品中心 / 备份 / 设置 / 向导）的宿主。
+ *
+ * 四个屏都自带标题栏与滚动容器，这里只负责"占满写作区剩下的高度"，
+ * 不再加 padding —— 否则它们自带的内边距会变成双层。
+ */
+.app__screen {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--yfe-color-bg, #111318);
+  color: var(--yfe-color-text, #e6e8ee);
 }
 
 .app__footer {
